@@ -30,8 +30,8 @@ test('rejects non-increasing or non-unique seqs', () => {
     steps: [{ seq: 3, kind: 'action' }, { seq: 1, kind: 'observation' }],
   })), /strictly increasing/)
   assert.throws(() => normalizeEvidence(ev({
-    steps: [{ seq: 0, kind: 'action' }],
-  })), /seq must be an integer >= 1/)
+    steps: [{ seq: -1, kind: 'action' }],
+  })), /seq must be a non-negative integer/)
 })
 
 test('rejects unknown step kinds and non-string fields', () => {

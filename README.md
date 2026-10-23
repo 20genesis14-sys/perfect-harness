@@ -157,6 +157,7 @@ const result = await runImprovementStep({ task, baseSpec, substrate, channels, g
 
 ## Status
 
-`npm test` — 65 tests. Core + mock adapter + DSH adapter (against a
-mocked host ctx mirroring the real `.d.ts` shapes) done. See `AGENTS.md`
+`npm test` — 68 tests. Core + mock adapter + DSH adapter done. The DSH
+mock ctx mirrors the real `.d.ts` shapes — `SessionEvent{type,seq,time,data}`
+payloads verified against a live 1005-event session log. See `AGENTS.md`
 for the working contract and `docs/RECON-DSH.md` for the seam inventory.

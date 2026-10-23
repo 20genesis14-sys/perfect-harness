@@ -20,18 +20,19 @@ const TOOL_UNIVERSE = ['fs_read', 'fs_write', 'web_search', 'mc_discover']
 function makeDshContext({ withAgents = true, scripted = null } = {}) {
   const listeners = new Map()
   const sessions = new Map()
-  let seqCounter = 0
 
-  const emit = (session, type, payload) => {
-    const event = { sessionId: session.id, seq: seqCounter++, time: Date.now(), type, payload }
+  // SessionEvent = {type, seq, time, data} — seq is per-session, 0-based.
+  const emit = (session, type, data) => {
+    const event = { sessionId: session.id, seq: session._seq++, time: Date.now(), type, data }
     session._events.push(event)
     for (const h of listeners.get('session/event') ?? []) h(session, event)
     return event
   }
 
-  const makeSession = (id) => ({
+  const makeSession = (id, inheritedEventCount = 0) => ({
     id,
     _events: [],
+    _seq: inheritedEventCount, // own events continue after the inherited prefix
     snapshotEvents(fromSeq = 0) { return this._events.filter((e) => e.seq >= fromSeq) },
   })
 
@@ -49,13 +50,19 @@ function makeDshContext({ withAgents = true, scripted = null } = {}) {
     _idle: null,
   })
 
+  // Real SessionEventMap payload shapes:
+  //   tool/call  data = {turn,step,callId,name,arguments: <JSON string>}
+  //   tool/result data = {message:{toolCallId,content,isError?},error?}
+  //   assistant/message data = {message:{content},stream,usage?}
+  //   user/message  data = UserMessage {content,source:{kind}}
+  //   turn/end    data = {turn, reason:{kind:'completed'|'aborted'|'error'|…}}
   const defaultScript = (session, emitFn) => {
     emitFn(session, 'turn/start', { turn: 1 })
-    emitFn(session, 'user/message', { message: { role: 'user', content: [{ type: 'text', text: 'task' }], source: { kind: 'user' } } })
-    emitFn(session, 'tool/call', { callId: 'c1', name: 'fs_read', arguments: { path: 'a.txt' } })
-    emitFn(session, 'tool/result', { callId: 'c1', content: [{ type: 'text', text: 'file body' }] })
-    emitFn(session, 'assistant/message', { message: { role: 'assistant', content: [{ type: 'text', text: 'DONE-BASE' }] }, usage: { inputTokens: 100, outputTokens: 20 } })
-    emitFn(session, 'turn/end', { reason: 'completed' })
+    emitFn(session, 'user/message', { role: 'user', content: [{ type: 'text', text: 'task' }], source: { kind: 'user' } })
+    emitFn(session, 'tool/call', { turn: 1, step: 1, callId: 'c1', name: 'fs_read', arguments: JSON.stringify({ path: 'a.txt' }) })
+    emitFn(session, 'tool/result', { turn: 1, step: 1, message: { role: 'tool', toolCallId: 'c1', content: [{ type: 'text', text: 'file body' }] } })
+    emitFn(session, 'assistant/message', { turn: 1, step: 1, message: { role: 'assistant', content: [{ type: 'text', text: 'DONE-BASE' }] }, stream: [], usage: { inputTokens: 100, outputTokens: 20 } })
+    emitFn(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   }
 
   const services = {
@@ -75,7 +82,7 @@ function makeDshContext({ withAgents = true, scripted = null } = {}) {
   if (withAgents) {
     services.agents = {
       async create(options) {
-        const session = makeSession(options.sessionId)
+        const session = makeSession(options.sessionId, options.inheritedEventCount ?? 0)
         sessions.set(session.id, session)
         const agent = makeAgent(session, scripted)
         const agentCtx = {
@@ -235,11 +242,11 @@ test('run: events become normalized evidence with seqs, usage, outcome', async (
 
 test('run: correction steps from second user message, injections skipped', async () => {
   const scripted = (session, emit) => {
-    emit(session, 'user/message', { message: { content: [{ type: 'text', text: 'task' }], source: { kind: 'user' } } })
-    emit(session, 'user/message', { message: { content: [{ type: 'text', text: 'injected ctx' }], source: { kind: 'runtime-context' } } })
-    emit(session, 'user/message', { message: { content: [{ type: 'text', text: 'wait, not that' }], source: { kind: 'user' } } })
-    emit(session, 'assistant/message', { message: { content: [{ type: 'text', text: 'ok' }] } })
-    emit(session, 'turn/end', { reason: 'completed' })
+    emit(session, 'user/message', { role: 'user', content: [{ type: 'text', text: 'task' }], source: { kind: 'user' } })
+    emit(session, 'user/message', { role: 'user', content: [{ type: 'text', text: 'injected ctx' }], source: { kind: 'runtime-context' } })
+    emit(session, 'user/message', { role: 'user', content: [{ type: 'text', text: 'wait, not that' }], source: { kind: 'user' } })
+    emit(session, 'assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: 'ok' }] }, stream: [] })
+    emit(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
   }
   const sub = createDshSubstrate({ ctx: makeDshContext({ scripted }) })
   const handle = await sub.mount({})
@@ -247,6 +254,49 @@ test('run: correction steps from second user message, injections skipped', async
   const corr = ev.steps.filter((s) => s.kind === 'correction')
   assert.equal(corr.length, 1)
   assert.match(corr[0].text, /wait, not that/)
+  await sub.dispose(handle)
+})
+
+test('run: real-shape edge cases — isError result, string args file, aborted, seq 0', async () => {
+  const scripted = (session, emit) => {
+    emit(session, 'user/message', { role: 'user', content: [{ type: 'text', text: 'task' }], source: { kind: 'user' } })
+    // tool/call with a JSON-STRING arguments payload carrying an artifact
+    emit(session, 'tool/call', { turn: 1, step: 1, callId: 'w1', name: 'fs_write', arguments: JSON.stringify({ path: 'out.md', content: '# report' }) })
+    // isError lives inside message; user-facing reason is data.error
+    emit(session, 'tool/result', { turn: 1, step: 1, message: { toolCallId: 'w1', content: [{ type: 'text', text: 'denied' }], isError: true }, error: { name: 'FsError', code: 'EACCES', reason: 'path outside root' } })
+    emit(session, 'assistant/attempt', { turn: 1, step: 2, stream: [] })
+    emit(session, 'assistant/message', { turn: 1, step: 3, message: { content: [{ type: 'text', text: 'partial' }] }, stream: [], interrupted: true })
+    emit(session, 'turn/end', { turn: 1, reason: { kind: 'aborted', reason: { kind: 'user' } } })
+  }
+  const sub = createDshSubstrate({ ctx: makeDshContext({ scripted }) })
+  const handle = await sub.mount({})
+  const ev = await sub.run(handle, { id: 't', domain: 'd', prompt: 'p' })
+
+  assert.equal(ev.outcome, 'aborted')
+  assert.deepEqual(ev.deliverable.files, { 'out.md': '# report' })
+  const kinds = ev.steps.map((s) => s.kind)
+  assert.deepEqual(kinds, ['action', 'error', 'error'])
+  assert.match(ev.steps[1].text, /denied[\s\S]*EACCES/)
+  assert.equal(ev.steps[0].seq, 1) // seq 0 was the skipped task user/message
+  await sub.dispose(handle)
+})
+
+test('evidenceFromEvents: seq 0 action survives (host seqs are 0-based)', () => {
+  const ev = evidenceFromEvents([
+    { seq: 0, time: 1, type: 'tool/call', data: { turn: 1, step: 1, callId: 'c', name: 'fs_read', arguments: '{}' } },
+    { seq: 1, time: 2, type: 'tool/result', data: { message: { toolCallId: 'c', content: [{ type: 'text', text: 'x' }] } } },
+  ], { runId: 'r', specHash: 'h', task: { id: 't', domain: 'd', prompt: 'p' } })
+  assert.equal(ev.steps[0].seq, 0)
+  assert.equal(ev.steps[0].kind, 'action')
+})
+
+test('run: empty event log still normalizes to a valid evidence', async () => {
+  const sub = createDshSubstrate({ ctx: makeDshContext({ scripted: () => {} }) })
+  const handle = await sub.mount({})
+  const ev = await sub.run(handle, { id: 't', domain: 'd', prompt: 'p' })
+  assert.equal(ev.outcome, 'ok')
+  assert.equal(ev.steps.length, 0)
+  assert.equal(ev.deliverable.delivered, false)
   await sub.dispose(handle)
 })
 
@@ -276,10 +326,10 @@ test('full improvement loop over DSH substrate (routed selector → auto gate)',
       const answer = names.includes('ph:persona') && names.includes('ph:guidance')
         ? 'DONE-COMPOSED'
         : names.includes('ph:persona') ? 'DONE-BETTER' : 'DONE-BASE'
-      emit(session, 'tool/call', { callId: 'c1', name: 'fs_read', arguments: { path: 'x' } })
-      emit(session, 'tool/result', { callId: 'c1', content: [{ type: 'text', text: 'body' }] })
-      emit(session, 'assistant/message', { message: { content: [{ type: 'text', text: answer }] }, usage: { inputTokens: 50, outputTokens: 10 } })
-      emit(session, 'turn/end', { reason: 'completed' })
+      emit(session, 'tool/call', { turn: 1, step: 1, callId: 'c1', name: 'fs_read', arguments: '{}' })
+      emit(session, 'tool/result', { turn: 1, step: 1, message: { toolCallId: 'c1', content: [{ type: 'text', text: 'body' }] } })
+      emit(session, 'assistant/message', { turn: 1, step: 1, message: { content: [{ type: 'text', text: answer }] }, stream: [], usage: { inputTokens: 50, outputTokens: 10 } })
+      emit(session, 'turn/end', { turn: 1, reason: { kind: 'completed' } })
     },
   })
   const sub = createDshSubstrate({ ctx })
