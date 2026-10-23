@@ -251,3 +251,13 @@ Findings the live run exposed, now encoded:
   served, `propose` returned `[]` verbatim — the library correctly
   suppresses redundant proposals on a "solved" domain (recursion working,
   arguably too well: campaigns need domain diversity to keep proposing).
+- **Campaign runner** (`lib/core/campaign.js`): N tasks, adoptedSpec carries
+  forward, prefix-rule lesson accumulation, crash survival, metrics
+  {improved, baseKept, adoptionRate, lessonsWritten, wallMs}. Live on proc
+  substrate: 3 tasks × ~10 spawned processes each — all steps completed,
+  base kept honestly every time.
+- **Instruction-dominance finding**: injected spec-level flaws (forced
+  greeting, French-only, no-tools) did NOT degrade live outcomes — the
+  model prioritized the task prompt over `ph:guidance` sections every
+  time. Harness prompt flaws must be positioned strongly to matter;
+  blind selection correctly refused adoption on outcome parity.
