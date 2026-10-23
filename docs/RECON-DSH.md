@@ -144,3 +144,18 @@ Verified on the wire (probe-result.json + committed session log):
   notes this at mount time.
 - `agentPresets` service is absent in the headless bundle (desktop profile
   only) — preset-row mounting degrades with the honest note.
+- `seededFork` — a second mount with `seed: buildForkSeed(raw, 18)` replayed
+  the prefix verbatim (seq 0–19 incl. inherited `session/title`), committed
+  `session/end-seed{inherited:true}` at seq 20, and continued **turn 2**
+  (numbering does not reset). Asked "what was the exact text?" it answered
+  `PROBE-OK` — context inheritance proven semantically.
+- `logRecords` — `appendPluginRecord(session, 'plugin:perfect-harness', …)`
+  committed an `ignorable` event at seq 19/20 with that exact type.
+- **Dual-package hazard (important)**: deps injected from a different
+  package copy fail identity checks — MaxCompact's copy of
+  `dsh-session` threw `Receiver must be an instance of class Session`.
+  Working resolution: `file:///` imports against the host's own
+  `resources/app.asar/dsh/node_modules/...` (Electron resolves asar paths
+  under `ELECTRON_RUN_AS_NODE`; plain Node cannot). Production plugins
+  installed into the profile's `node_modules` resolve the same copies the
+  host loads, so this only bites out-of-profile mounts like this probe.

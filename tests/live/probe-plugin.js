@@ -6,19 +6,22 @@ import { writeFile } from 'node:fs/promises'
 import { createDshSubstrate } from '../../lib/adapters/dsh/index.js'
 
 // Host function deps — the substrate takes them by injection so lib/ keeps no
-// hard @deepseek-ai imports. Resolved from MaxCompact's installed copies; the
-// runtime accepts them because the host uses the same package versions.
-const MC = 'file:///D:/MaxCompact/dsh-max-compact/node_modules'
+// hard @deepseek-ai imports. They MUST come from the host's own package copy
+// (app.asar): a foreign copy's instanceof checks fail ('Receiver must be an
+// instance of class Session'). Electron resolves asar paths under
+// ELECTRON_RUN_AS_NODE.
+const HOST_NM = 'file:///C:/Users/Ольга/AppData/Local/Programs/DeepSeek Harness/resources/app.asar/dsh/node_modules'
 const loadDeps = async () => {
   const [fork, session, llm] = await Promise.all([
-    import(`${MC}/@deepseek-ai/dsh-session/lib/types/fork.js`).catch(() => ({})),
-    import(`${MC}/@deepseek-ai/dsh-session/lib/index.js`).catch(() => ({})),
-    import(`${MC}/@deepseek-ai/dsh-llm/lib/types/message.js`).catch(() => ({})),
+    import(`${HOST_NM}/@deepseek-ai/dsh-session/lib/types/fork.js`).catch((e) => ({ __err: String(e) })),
+    import(`${HOST_NM}/@deepseek-ai/dsh-session/lib/index.js`).catch((e) => ({ __err: String(e) })),
+    import(`${HOST_NM}/@deepseek-ai/dsh-llm/lib/types/message.js`).catch((e) => ({ __err: String(e) })),
   ])
   return {
     buildForkSeed: fork.buildForkSeed,
     appendPluginRecord: session.appendPluginRecord,
     createUserMessage: llm.createUserMessage,
+    __errors: [fork.__err, session.__err, llm.__err].filter(Boolean),
   }
 }
 
@@ -40,6 +43,7 @@ export function apply(ctx, config = {}) {
         })
         const caps = sub.capabilities()
         log('ph-probe caps: ' + JSON.stringify(caps))
+        if (deps.__errors?.length) log('ph-probe dep import errors: ' + deps.__errors.join(' | '))
         const spec = {
           prompt: { guidance: 'Reply with exactly the text PROBE-OK and nothing else.' },
           model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' },
@@ -67,7 +71,44 @@ export function apply(ctx, config = {}) {
           await sub.dispose(h2)
         } catch (e) { restrictCheck = { error: String(e?.stack ?? e) } }
 
-        const result = { caps, notes: sub.notes(), handleNotes: handle.notes, mount: sub.describeMount(handle), evidence: ev, headerTools, restrictCheck }
+        // logRecords: run() appends 'plugin:perfect-harness' — find it in the
+        // committed stream (ignorable events sit outside SessionEventMap).
+        const recordEvents = raw.filter((e) => typeof e.type === 'string' && e.type.startsWith('plugin:'))
+        // Direct write-test: the flag is dep-injected, so prove the seam
+        // actually accepts a record (the upstream caller gate may reject).
+        let recordCheck = { skipped: true }
+        try {
+          const seq = deps.appendPluginRecord
+            ? deps.appendPluginRecord(handle.agent.session, 'plugin:perfect-harness', { kind: 'probe-write-test' })
+            : undefined
+          recordCheck = { wrote: typeof seq === 'number', seq }
+        } catch (e) { recordCheck = { threw: true, error: String(e?.message ?? e) } }
+
+        // seededFork: branch a new agent off run-1's committed prefix. The
+        // fork inherits seq 0..18 (complete turn 1), so it must remember the
+        // instruction WITHOUT being told again.
+        let forkCheck = { skipped: true }
+        try {
+          const boundary = Math.max(...raw.map((e) => e.seq ?? 0))
+          const h3 = await sub.mount(spec, {
+            seed: { events: raw, boundary, parentSession: handle.sessionId },
+          })
+          const forkEv = await sub.run(h3, {
+            id: 'live-3', domain: 'live',
+            prompt: 'Without repeating my earlier instruction, what was the exact text I told you to reply with? Answer with only that text.',
+          })
+          const own = h3.agent?.session?.snapshotEvents?.(h3.inheritedEventCount) ?? []
+          const all = h3.agent?.session?.snapshotEvents?.(0) ?? []
+          forkCheck = {
+            boundary, inheritedEventCount: h3.inheritedEventCount,
+            totalEvents: all.length, ownEvents: own.length,
+            ownTypes: own.map((e) => e.type),
+            outcome: forkEv.outcome, finalText: forkEv.deliverable?.finalText,
+          }
+          await sub.dispose(h3)
+        } catch (e) { forkCheck = { error: String(e?.stack ?? e) } }
+
+        const result = { caps, notes: sub.notes(), handleNotes: handle.notes, mount: sub.describeMount(handle), evidence: ev, headerTools, restrictCheck, recordEvents: recordEvents.map((e) => ({ seq: e.seq, type: e.type })), recordCheck, forkCheck }
         await writeFile(out, JSON.stringify(result, null, 2))
         log(`ph-probe done: outcome=${ev.outcome} steps=${ev.steps.length} tokens=${ev.stats.tokens} delivered=${ev.deliverable.delivered}`)
       } catch (e) {
