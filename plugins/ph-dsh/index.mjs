@@ -1,4 +1,10 @@
-// PerfectHarness desktop plugin — mount via a profile patch row:
+// PerfectHarness desktop plugin — RESEARCH / EXPERIMENTAL.
+// Every /ph step spends REAL tokens on your configured provider route:
+// base + N candidate rollouts + refined + judge pairs + reflect. There
+// is no cost cap. Mounting this into your profile means accepting that
+// spend — responsibility for burned tokens is entirely yours.
+//
+// Mount via a profile patch row:
 //   - insert: [{ id: ph-dsh, name: 'file:///D:/PerfectHarness/plugins/ph-dsh/index.mjs' }]
 // (or a './'-relative name inside a patch file — patch-anchored resolution is
 // the verified-working path; registered presets require file:// only).

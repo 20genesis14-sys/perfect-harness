@@ -4,6 +4,26 @@ Vendor-agnostic **recursive agent harnessing** — the method from the
 Harness² paper, rebuilt as a portable library: a pure method core plus
 substrate adapters. No model calls, no host SDKs, no I/O in `lib/core/`.
 
+> **⚠ Research project — read before running.**
+>
+> This is an experimental, test-stage implementation. It is **not**
+> production software, and it is **not free to run**.
+>
+> Every improvement step makes *real model calls* on your configured
+> provider: a base rollout, one rollout per proposed candidate, a refined
+> rollout, a blind judge for every pair ×2 seat orders, a reflect pass —
+> a single step can burn tens of thousands of tokens. A campaign
+> multiplies that by task count.
+>
+> If you mount this into your own DSH profile (or any live host), the
+> tokens it spends are **your tokens, at your provider's rates, entirely
+> at your own risk and responsibility**. There is no cost cap built in —
+> `stats.costUsd` reports what already happened, it does not prevent it.
+>
+> Verified against DSH `0.2.1-rc.2` (a developer preview — host APIs can
+> change between releases). See `docs/RECON-DSH.md` for what was actually
+> verified and `docs/ARCHITECTURE.md` for internals.
+
 ## In plain words
 
 An AI agent is more than a model. Around it sits a "harness": the system
@@ -132,7 +152,16 @@ await substrate.dispose(handle)
 | `tools.guidance` | `ph:tool-guidance` (3200) |
 | `model` | `agentOptions {provider, model, reasoningEffort}` at create |
 | `memory` | `ph:memory` (300) |
-| `skills`/`agents`/`scripts` | noted as unmounted — the preset path (`agentPresets.register` + `meta.agentPreset`) is the next iteration |
+| `skills`/`agents`/`scripts`/`presets` | `agentPresets.register` temp preset = cloned base rows + spec rows; `scripts.*` sources materialize to `file://` `.mjs` rows |
+
+Beyond the in-process substrate there is a **process substrate**
+(`lib/adapters/dsh/proc.js`): every rollout spawns real `dsh headless
+--json` — true OS-process isolation, NDJSON → Evidence, immune to the
+in-process teardown race. `pricing.js` turns real token splits into
+`costUsd` per route (OpenRouter rates; unpriced routes stay `0`, never
+guessed). `gate.js` wires `gate.confirm` to the desktop
+`userQuestions.ask` waterfall — `plugins/ph-dsh/` is the mountable plugin
+exposing `/ph status | step | lessons` on a desktop profile.
 
 `run` sends the task as a `next-turn` user message, waits `whenIdle` (wall
 clock bounded), and rebuilds `Evidence` from `session.snapshotEvents()` —
@@ -157,7 +186,10 @@ const result = await runImprovementStep({ task, baseSpec, substrate, channels, g
 
 ## Status
 
-`npm test` — 68 tests. Core + mock adapter + DSH adapter done. The DSH
-mock ctx mirrors the real `.d.ts` shapes — `SessionEvent{type,seq,time,data}`
-payloads verified against a live 1005-event session log. See `AGENTS.md`
-for the working contract and `docs/RECON-DSH.md` for the seam inventory.
+`npm test` — 106 tests. Core + mock adapter + DSH adapter (in-process and
+external-process) done and live-verified on a real headless profile —
+every capability flag exercised on the wire, real PTC dispatch events
+mapped, lessons persisted across processes, a full gated improvement
+step adopted a candidate live. See `AGENTS.md` for the working contract,
+`docs/ARCHITECTURE.md` for internals, and `docs/RECON-DSH.md` for the
+empirical seam inventory (the source of truth about the host).
