@@ -17,7 +17,7 @@ import { specHash, normalizeSpec } from '../lib/core/spec.js'
 
 const TOOL_UNIVERSE = ['fs_read', 'fs_write', 'web_search', 'mc_discover']
 
-function makeDshContext({ withAgents = true, scripted = null } = {}) {
+function makeDshContext({ withAgents = true, scripted = null, baseRows = null } = {}) {
   const listeners = new Map()
   const sessions = new Map()
 
@@ -78,6 +78,20 @@ function makeDshContext({ withAgents = true, scripted = null } = {}) {
       },
     },
     systemPrompt: { section: () => {}, context: () => {} },
+    agentPresets: {
+      _registered: new Map(),
+      _baseRows: baseRows,
+      async readDocument(id) {
+        if (id !== 'standard' || !this._baseRows) throw new Error(`preset ${id} not found`)
+        return { content: '<yaml>', name: 'standard' }
+      },
+      async register(definition) {
+        if (this._registered.has(definition.id)) throw new Error(`duplicate preset id ${definition.id}`)
+        this._registered.set(definition.id, definition)
+        return async () => { this._registered.delete(definition.id) }
+      },
+      async list() { return [...this._registered.keys()] },
+    },
   }
   if (withAgents) {
     services.agents = {
@@ -210,7 +224,9 @@ test('planMount: pure spec → plan, keep−hide resolved, unmounted sections no
     { toolUniverse: ['a', 'b', 'c'] },
   )
   assert.deepEqual(plan.restrict, { allow: ['a'] })
-  assert.deepEqual(plan.unmounted, ['skills'])
+  // empty skills entry → per-entry unmounted note (row-shaped entries would
+  // become presetRows instead — see the preset-path test)
+  assert.deepEqual(plan.unmounted, ['skills.web'])
   assert.ok(plan.notes.some((n) => n.includes('ghost')))
   assert.equal(plan.sections.find((s) => s.name === 'ph:persona').text, 'p')
 })
@@ -298,6 +314,64 @@ test('run: empty event log still normalizes to a valid evidence', async () => {
   assert.equal(ev.steps.length, 0)
   assert.equal(ev.deliverable.delivered, false)
   await sub.dispose(handle)
+})
+
+test('mount: preset path clones base + overlays spec rows, meta.agentPreset set', async () => {
+  const baseRows = [
+    { id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' },
+    { id: 'skill-filesystem', name: '@deepseek-ai/dsh-skill-filesystem' },
+    { id: 'tool-bash', name: '@deepseek-ai/dsh-tool-bash' },
+  ]
+  const ctx = makeDshContext({ baseRows })
+  const sub = createDshSubstrate({
+    ctx,
+    deps: { parsePresetYaml: () => baseRows.map((r) => ({ ...r })) },
+    opts: { basePreset: 'standard' },
+  })
+  const handle = await sub.mount({
+    skills: {
+      'skill-filesystem': { disabled: true },                 // override: disable base row
+      'skill-custom': { name: '@vendor/skill-custom', config: { x: 1 } }, // new row
+      'skill-bad': { name: '' },                              // invalid — noted, skipped
+      'skill-empty': {},                                      // empty — noted, skipped
+    },
+    agents: { 'sub-x': { name: '@deepseek-ai/dsh-subagent' } },
+    scripts: { 'run.sh': 'echo hi' },                         // file-plane — noted
+  })
+  const meta = handle.agent.session._options.meta
+  assert.ok(meta.agentPreset.startsWith('ph-probe-'))
+  const def = ctx.get('agentPresets')._registered.get(meta.agentPreset)
+  assert.ok(def, 'probe preset registered')
+  const plugins = def.plugins
+  assert.equal(plugins.length, 5) // 3 base + 2 new (skill-custom + sub-x)
+  assert.equal(plugins.find((r) => r.id === 'skill-filesystem').disabled, true)
+  assert.equal(plugins.find((r) => r.id === 'skill-custom').config.x, 1)
+  assert.ok(plugins.some((r) => r.id === 'sub-x'))
+  assert.ok(!plugins.some((r) => r.id === 'skill-bad' || r.id === 'skill-empty'))
+  assert.ok(handle.notes.some((n) => n.includes('skill-bad')))
+  assert.ok(handle.notes.some((n) => n.includes('scripts')))
+  await sub.dispose(handle)
+  assert.ok(!ctx.get('agentPresets')._registered.has(meta.agentPreset), 'preset unmounted on dispose')
+})
+
+test('mount: preset rows without agentPresets seam → honest notes, still mounts', async () => {
+  const ctx = makeDshContext()
+  const realGet = ctx.get.bind(ctx)
+  ctx.get = (name) => (name === 'agentPresets' ? undefined : realGet(name))
+  const sub = createDshSubstrate({ ctx })
+  const handle = await sub.mount({ skills: { 'skill-x': { name: '@v/x' } } })
+  assert.ok(handle.notes.some((n) => n.includes('agentPresets')))
+  assert.equal(handle.agent.session._options.meta.agentPreset, undefined)
+  await sub.dispose(handle)
+})
+
+test('mergePresetRows: spec id wins, new ids append in order', async () => {
+  const { mergePresetRows } = await import('../lib/adapters/dsh/spec-mount.js')
+  const merged = mergePresetRows(
+    [{ id: 'a', name: 'A' }, { id: 'b', name: 'B' }],
+    [{ id: 'b', disabled: true }, { id: 'c', name: 'C' }],
+  )
+  assert.deepEqual(merged, [{ id: 'a', name: 'A' }, { id: 'b', disabled: true }, { id: 'c', name: 'C' }])
 })
 
 test('run: timeout → cancel + outcome timeout', async () => {
