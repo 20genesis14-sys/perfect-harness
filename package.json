@@ -16,5 +16,11 @@
     "check": "node --check lib/index.js && node --check lib/adapters/mock.js && for %f in (lib\\core\\*.js) do node --check %f"
   },
   "license": "Apache-2.0",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/20genesis14-sys/perfect-harness.git"
+  },
+  "bugs": "https://github.com/20genesis14-sys/perfect-harness/issues",
+  "homepage": "https://github.com/20genesis14-sys/perfect-harness#readme",
   "private": true
 }

@@ -4,6 +4,27 @@ Vendor-agnostic **recursive agent harnessing** — the method from the
 Harness² paper, rebuilt as a portable library: a pure method core plus
 substrate adapters. No model calls, no host SDKs, no I/O in `lib/core/`.
 
+## In plain words
+
+An AI agent is more than a model. Around it sits a "harness": the system
+prompt, the tools it may call, its memory, its skills, the rules of the
+loop. Most agents stay exactly as they were first configured.
+
+This library lets the harness **improve itself from experience**. After a
+task it proposes small concrete edits ("add this tool", "rewrite this prompt
+section"), tries candidates on the same task, compares their behavior — and
+keeps only what actually helped. A human gate decides what gets adopted;
+nothing mutates silently. Lessons learned are stored with links to the exact
+runs that prove them.
+
+It is deliberately host-free: the improvement logic is pure code, and each
+agent framework (DeepSeek Harness, Claude Code, a mock for tests) plugs in
+through a small adapter contract. If a host cannot do something — fork a
+session, route a judge to a different model — the library degrades honestly
+instead of pretending.
+
+## The method
+
 A **harness** is everything around the model: prompts, tools, memory, skills,
 orchestration. This library improves that system without touching weights:
 
