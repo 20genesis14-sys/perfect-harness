@@ -290,6 +290,22 @@ Findings the live run exposed, now encoded:
   candidate that touches it agrees; conflicts reported, stay on base),
   `'model-else-union'` (fallback when channel absent/fails/{}). Union has
   NO verdict input — ranking disagreement defers to selection.
+- **Desktop human gate** (`lib/adapters/dsh/gate.js` +
+  `plugins/ph-dsh/index.mjs`): `ctx.userQuestions.ask({questions})` routes
+  through the `user-questions/request` Cordis waterfall → desktop UI
+  answerer → real human choice. Verified from source: ask() WITHOUT an
+  agent hits the global waterfall (an owned probe agent would throw
+  DELEGATED_CALLER — only the exact live runtime root may carry agent);
+  no answerer → `NO_PROVIDER` → we return false (human-required gate
+  keeps base, never crashes). Answer shape: `{answers:[{id,selected[],
+  custom?}]}`. The plugin registers `/ph` through `ctx.inject(['commands'])`
+  (the real deferred-injection seam — same pattern the presentation
+  plugin uses for ptcRuntime; `ctx.on('ready')` is NOT a documented
+  cordis event). `/ph step <task>` runs a full gated improvement step;
+  `/ph status` shows seams + gate reachability. NOT live-verified on the
+  desktop profile — the desktop app cannot be driven headlessly from
+  here; verified at the contract level (mocked service + real source
+  shapes) only.
 - **Instruction-dominance finding**: injected spec-level flaws (forced
   greeting, French-only, no-tools) did NOT degrade live outcomes — the
   model prioritized the task prompt over `ph:guidance` sections every

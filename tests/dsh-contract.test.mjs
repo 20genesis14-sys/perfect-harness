@@ -649,3 +649,28 @@ test('mount: resolveModelInfo failure leaves the effort untouched (never guess)'
   assert.equal(handle.agent.session._options.agentOptions.reasoningEffort, 'low')
   await sub.dispose(handle)
 })
+
+// ── human gate (userQuestions seam) ──────────────────────────────────────────
+import { createDshHumanGate } from '../lib/adapters/dsh/gate.js'
+
+test('human gate: Adopt answer → true; Keep base → false; full request shape', async () => {
+  let seen = null
+  const ctx = { get: (n) => n === 'userQuestions' ? { ask: async (req) => { seen = req; return { answers: [{ id: 'ph-gate', selected: ['Adopt'] }] } } } : undefined }
+  const gate = createDshHumanGate({ ctx })
+  assert.equal(await gate.confirm({ label: 'candidate:0', reason: 'preferred 2/2', confidence: 'high', specDiff: '~ prompt.guidance' }), true)
+  assert.equal(seen.questions[0].id, 'ph-gate')
+  assert.match(seen.questions[0].question, /candidate:0/)
+  assert.ok(seen.questions[0].options.some((o) => o.label === 'Keep base'))
+
+  const ctxNo = { get: () => ({ ask: async () => ({ answers: [{ id: 'ph-gate', selected: ['Keep base'] }] }) }) }
+  assert.equal(await createDshHumanGate({ ctx: ctxNo }).confirm({}), false)
+})
+
+test('human gate: missing service / NO_PROVIDER → false + note, never throws', async () => {
+  const notes = []
+  const noSvc = createDshHumanGate({ ctx: { get: () => undefined }, notes })
+  assert.equal(await noSvc.confirm({ label: 'x' }), false)
+  const noProvider = createDshHumanGate({ ctx: { get: () => ({ ask: async () => { const e = new Error('no answerer'); e.code = 'NO_PROVIDER'; throw e } }) }, notes })
+  assert.equal(await noProvider.confirm({ label: 'x' }), false)
+  assert.ok(notes.some((n) => n.includes('NO_PROVIDER')))
+})
