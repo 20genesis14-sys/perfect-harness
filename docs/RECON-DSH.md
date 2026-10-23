@@ -143,7 +143,38 @@ Verified on the wire (probe-result.json + committed session log):
   assembly ("prompt variable {{model}} has no value") — the adapter now
   notes this at mount time.
 - `agentPresets` service is absent in the headless bundle (desktop profile
-  only) — preset-row mounting degrades with the honest note.
+  only) — preset-row mounting degrades with the honest note. BUT the service
+  CAN be injected into headless: adding
+  `{id: agent-preset-registry, name: "@deepseek-ai/dsh-agent-preset-registry",
+    config: {default: standard, selectedDefault: tiered}}` to the patch loads
+  it live — `list()` then returns [] (no presets shipped in headless), while
+  `register`/`readDocument` work fully. Verified live: registering a
+  structured definition parsed from a real desktop-generated
+  `.agent-presets/custom/agent.cordis.yml` (23 rows incl. `!!js` exprs via
+  `parseRowsYaml`), then `readDocument('ph-base')` serving it back (registry
+  serves REGISTERED docs, not only file-backed ones), then the normal
+  clone→overlay→`meta.agentPreset` mount → 24 rows accepted by
+  `agents.create`. Preset disposal left the agent factory alive (both the
+  substrate's preset-dispose and a manual base dispose).
+- **Host-teardown race (the real headless limit)**: the agent factory is
+  unregistered when the main task's turn ends — ANY subsequent
+  `agents.create` throws `no agent factory registered`. In-process probes
+  must finish every mount before the main task ends; long main tasks only
+  reduce the odds. The structural fix is external isolation: spawn
+  `dsh headless --json` per roll-out (NDJSON stream: `session` /
+  `status{phase}` / `text` / `final` — enough to rebuild canonical
+  Evidence). Verified live 2026-10: one full `runImprovementStep` completed
+  in-process only when teardown landed late; identical runs died at random
+  mount counts (2–26).
+- First REAL lesson admitted (same run): base spec carried a greeting-flaw
+  → `candidate:0` won the blind pool 3-1 (confidence inconsistent →
+  `gate.confirm` approved) → reflect produced a step-grounded lesson with
+  real `runId+seq` refs (cited the read-tool call seqs). `admitLesson`
+  correctly REJECTED two earlier drafts: label-refs (`"base"`/`"adopted"`
+  — model couldn't see runIds until they were printed in the reflect
+  prompt) and `seq=0` refs on step-free runs (no steps exist to cite → the
+  prompt now prints `Citable refs:` enumerating valid runId+seq pairs; a
+  step-free run legitimately cannot ground a seq-ref lesson).
 - `seededFork` — a second mount with `seed: buildForkSeed(raw, 18)` replayed
   the prefix verbatim (seq 0–19 incl. inherited `session/title`), committed
   `session/end-seed{inherited:true}` at seq 20, and continued **turn 2**

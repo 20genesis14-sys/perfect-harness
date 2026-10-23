@@ -5,6 +5,7 @@
 import { writeFile } from 'node:fs/promises'
 import { createDshSubstrate } from '../../lib/adapters/dsh/index.js'
 import { createDshChannels } from '../../lib/adapters/dsh/channels.js'
+import { createFileLessonStore } from '../../lib/adapters/file-lessons.js'
 import { runImprovementStep } from '../../lib/core/loop.js'
 
 // Host function deps — the substrate takes them by injection so lib/ keeps no
@@ -19,10 +20,14 @@ const loadDeps = async () => {
     import(`${HOST_NM}/@deepseek-ai/dsh-session/lib/index.js`).catch((e) => ({ __err: String(e) })),
     import(`${HOST_NM}/@deepseek-ai/dsh-llm/lib/types/message.js`).catch((e) => ({ __err: String(e) })),
   ])
+  // parsePresetYaml: MaxCompact's battle-tested row parser (plain js-yaml +
+  // !!js→__jsExpr; no host coupling — safe to inject from its tree).
+  const presetReg = await import('file:///D:/MaxCompact/dsh-max-compact/lib/dsh/preset-registry.js').catch(() => ({}))
   return {
     buildForkSeed: fork.buildForkSeed,
     appendPluginRecord: session.appendPluginRecord,
     createUserMessage: llm.createUserMessage,
+    parsePresetYaml: presetReg.parseRowsYaml,
     __errors: [fork.__err, session.__err, llm.__err].filter(Boolean),
   }
 }
@@ -51,12 +56,89 @@ export function apply(ctx, config = {}) {
           model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' },
         }
         const handle = await sub.mount(spec)
+        // listener-vs-snapshot verification: count events the live
+        // session/event stream delivers vs what snapshotEvents() commits.
+        let listenerCount = -1
+        const off = ctx.on?.('session/event', (s) => { if (s && String(s.id) === String(handle.sessionId)) listenerCount++ })
         const ev = await sub.run(handle, { id: 'live-1', domain: 'live', prompt: 'Reply with exactly the text PROBE-OK and nothing else.' })
+        try { off?.() } catch { }
         // Raw snapshot for contract debugging — what the host actually commits.
         let raw = []
         try { raw = handle.agent?.session?.snapshotEvents?.(handle.inheritedEventCount) ?? [] } catch (e) { raw = [{ err: String(e) }] }
         const headerTools = raw.filter((e) => e.type === 'request/header').flatMap((e) => (e.data?.header?.tools ?? []).map((t) => t.name))
         await sub.dispose(handle)
+
+        // M3 — first real lesson, run EARLY: the host tears down the agent
+        // factory when the main task ends, so the mount-heavy improvement
+        // steps must land before the cheaper already-proven checks.
+        let lessonCheck = { skipped: true }
+        try {
+          const ch = createDshChannels({
+            substrate: sub,
+            spec: { model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' } },
+          })
+          const store = createFileLessonStore('D:/PerfectHarness/tests/live/lessons.json')
+          const library = await store.load()
+          const step = await runImprovementStep({
+            task: {
+              id: 'lesson-1', domain: 'exact-output',
+              prompt: 'Use the read tool to read the file probe-input.txt in the current directory, then reply with exactly its content and nothing else.',
+            },
+            baseSpec: {
+              prompt: { guidance: 'Always begin your reply with a warm friendly greeting before anything else.' },
+              model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' },
+            },
+            substrate: sub, channels: ch, caps: sub.capabilities(),
+            library,
+            // Simulated operator: approves gate prompts so the adoption path
+            // (and its reflect material) is exercised in headless.
+            gate: { confirm: async () => true },
+          })
+          await store.save(library)
+          lessonCheck = {
+            ok: step.ok, improved: step.improved, adoptedLabel: step.adoptedLabel,
+            librarySize: library.entries.length,
+            notes: step.notes,
+            proposals: step.trail.proposals.map((p) => p.description),
+            selection: step.trail.selection && { reason: step.trail.selection.reason, confidence: step.trail.selection.confidence, adoptIndex: step.trail.selection.adoptIndex },
+            lesson: step.lesson,
+            evidences: step.trail.evidences.map((e) => ({ label: e.label, outcome: e.evidence.outcome, final: e.evidence.deliverable?.finalText?.slice(0, 80) })),
+          }
+        } catch (e) { lessonCheck = { error: String(e?.stack ?? e) } }
+
+        // The crown jewel: one full Harness² improvement step live — propose,
+        // probe, compose, blind-select, gate, reflect, all on the real host.
+        let loopCheck = { skipped: true }
+        try {
+          const ch = createDshChannels({
+            substrate: sub,
+            spec: { model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' } },
+          })
+          // Same library + same domain → selectFor serves the lesson written
+          // by lessonCheck (prefix rule: later task in the same domain).
+          const store2 = createFileLessonStore('D:/PerfectHarness/tests/live/lessons.json')
+          const library2 = await store2.load()
+          const step = await runImprovementStep({
+            task: {
+              id: 'loop-1', domain: 'exact-output', index: 1,
+              prompt: 'Use the read tool to read the file probe-input.txt in the current directory, then reply with exactly its content and nothing else.',
+            },
+            baseSpec: spec,
+            substrate: sub,
+            channels: ch,
+            caps: sub.capabilities(),
+            library: library2,
+            gate: { confirm: async () => true },
+          })
+          await store2.save(library2)
+          loopCheck = {
+            lessonsServed: library2.selectFor({ domain: 'exact-output', beforeTaskIndex: 1 }).length,
+            ok: step.ok, improved: step.improved, adoptedLabel: step.adoptedLabel,
+            notes: step.notes, proposals: step.trail.proposals.map((p) => p.description),
+            selection: step.trail.selection, lesson: step.lesson && { cue: step.lesson.cue, lesson: step.lesson.lesson },
+            evidences: step.trail.evidences.map((e) => ({ label: e.label, outcome: e.evidence.outcome, final: e.evidence.deliverable?.finalText?.slice(0, 60) })),
+          }
+        } catch (e) { loopCheck = { error: String(e?.stack ?? e) } }
 
         // liveRestrict exercised for real: a second mount with tools.keep must
         // shrink the request/header tools list on the wire.
@@ -133,30 +215,53 @@ export function apply(ctx, config = {}) {
           channelCheck = { verdict, proposalCount: proposals.length, proposals: proposals.map((p) => p.description), notes: chNotes }
         } catch (e) { channelCheck = { error: String(e?.stack ?? e) } }
 
-        // The crown jewel: one full Harness² improvement step live — propose,
-        // probe, compose, blind-select, gate, reflect, all on the real host.
-        let loopCheck = { skipped: true }
+        // agentPresets live: the headless registry is EMPTY (list()→[]), so
+        // first register `ph-base` from a REAL preset file on disk
+        // (.agent-presets/custom/agent.cordis.yml — a genuine desktop-generated
+        // composition), then clone it via the normal mount path. Checks:
+        //   1. register() accepts a structured definition
+        //   2. readDocument() serves a registered (not file-backed) doc
+        //   3. agents.create accepts meta.agentPreset pointing at our temp id
+        let presetCheck = { skipped: true }
         try {
-          const ch = createDshChannels({
-            substrate: sub,
-            spec: { model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' } },
-          })
-          const step = await runImprovementStep({
-            task: { id: 'loop-1', domain: 'live', prompt: 'Reply with exactly the text PROBE-OK and nothing else.' },
-            baseSpec: spec,
-            substrate: sub,
-            channels: ch,
-            caps: sub.capabilities(),
-          })
-          loopCheck = {
-            ok: step.ok, improved: step.improved, adoptedLabel: step.adoptedLabel,
-            notes: step.notes, proposals: step.trail.proposals.map((p) => p.description),
-            selection: step.trail.selection, lesson: step.lesson && { cue: step.lesson.cue, lesson: step.lesson.lesson },
-            evidences: step.trail.evidences.map((e) => ({ label: e.label, outcome: e.evidence.outcome, final: e.evidence.deliverable?.finalText?.slice(0, 60) })),
+          const ap = ctx.get?.('agentPresets')
+          presetCheck = { servicePresent: Boolean(ap) }
+          if (ap) {
+            presetCheck.available = ap.list ? await ap.list() : 'no list()'
+            const { readFile } = await import('node:fs/promises')
+            const { homedir } = await import('node:os')
+            const presetFile = `${process.env.DSH_HOME ?? `${homedir()}/.dsh`}/.agent-presets/custom/agent.cordis.yml`
+            const rows = deps.parsePresetYaml(await readFile(presetFile, 'utf8'))
+            presetCheck.parsedBaseRows = rows.length
+            const baseDispose = await ap.register({ id: 'ph-base', name: 'ph base clone', plugins: rows })
+            presetCheck.registered = true
+            try {
+              const docBack = await ap.readDocument('ph-base')
+              presetCheck.readDocumentServesRegistered = typeof docBack?.content === 'string' && docBack.content.length > 0
+            } catch (e) { presetCheck.readDocumentServesRegistered = 'threw: ' + String(e?.message ?? e).slice(0, 120) }
+            const h4 = await sub.mount(
+              { ...spec, skills: { 'skill-fs': { name: '@deepseek-ai/dsh-skill-filesystem' } } },
+              { basePreset: 'ph-base' })
+            presetCheck.notes = h4.notes
+            presetCheck.mount = sub.describeMount(h4)
+            await sub.dispose(h4) // runs presetDispose — live-suspect #1
+            // Hazard isolation: did disposing the mounted preset kill the
+            // shared agent factory? Sanity-mount before disposing ph-base.
+            try {
+              const sanity = await sub.mount(spec)
+              presetCheck.factoryAfterProbeDispose = 'alive'
+              await sub.dispose(sanity)
+            } catch (e) { presetCheck.factoryAfterProbeDispose = 'dead: ' + String(e?.message ?? e).slice(0, 120) }
+            try { await baseDispose() } catch { /* cleanup best-effort */ }
+            try {
+              const sanity2 = await sub.mount(spec)
+              presetCheck.factoryAfterBaseDispose = 'alive'
+              await sub.dispose(sanity2)
+            } catch (e) { presetCheck.factoryAfterBaseDispose = 'dead: ' + String(e?.message ?? e).slice(0, 120) }
           }
-        } catch (e) { loopCheck = { error: String(e?.stack ?? e) } }
+        } catch (e) { presetCheck.error = String(e?.stack ?? e).slice(0, 400) }
 
-        const result = { caps, notes: sub.notes(), handleNotes: handle.notes, mount: sub.describeMount(handle), evidence: ev, headerTools, restrictCheck, recordEvents: recordEvents.map((e) => ({ seq: e.seq, type: e.type })), recordCheck, forkCheck, channelCheck, loopCheck }
+        const result = { caps, notes: sub.notes(), handleNotes: handle.notes, mount: sub.describeMount(handle), evidence: ev, eventCounts: { listener: listenerCount, snapshot: raw.length }, headerTools, restrictCheck, recordEvents: recordEvents.map((e) => ({ seq: e.seq, type: e.type })), recordCheck, forkCheck, channelCheck, presetCheck, lessonCheck, loopCheck }
         await writeFile(out, JSON.stringify(result, null, 2))
         log(`ph-probe done: outcome=${ev.outcome} steps=${ev.steps.length} tokens=${ev.stats.tokens} delivered=${ev.deliverable.delivered}`)
       } catch (e) {

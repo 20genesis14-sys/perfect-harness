@@ -37,7 +37,15 @@
 - id: credentials
   disabled: false
 
-# 4. Mount the live probe beside the headless app.
+# 4. Desktop-only seam brought into headless: the preset registry provides
+#    ctx.agentPresets (list/readDocument/register) for preset-row mounting.
+- insert:
+    - id: agent-preset-registry
+      name: '@deepseek-ai/dsh-agent-preset-registry'
+      config:
+        default: standard
+
+# 5. Mount the live probe beside the headless app.
 - insert:
     - id: ph-live-probe
       name: ./probe-plugin.js
