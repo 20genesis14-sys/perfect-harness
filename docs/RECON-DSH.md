@@ -98,3 +98,49 @@ Bonus vocab beyond base types (plugin-merged events): `job/*`, `compaction/*`,
   merge them into steps or PTC runs look tool-less.
 - `setup` is trusted same-process code: mount everything there; drive only
   after `agents.create` resolves (queued input is held until then).
+
+## Live verification (headless profile, real OpenRouter run)
+
+Executed `tests/live/probe-plugin.js` through
+`dsh headless --patch tests/live/probe.patch.yml` on the installed host.
+`probe.patch.yml` also demonstrates the minimal headless-model recipe:
+
+- `credentials` (`dsh-credentials-local`) is **disabled by default in the
+  headless bundle** — re-enable it or `apiKeyEnv` refs never resolve.
+- `llm-pi-ai` openrouter provider needs `api: openai-completions` set
+  explicitly; the installed model catalog does not cover custom model ids.
+- `agent-default-model` config patch must name `{provider, model}` — patch
+  configs replace wholesale, they do not merge.
+- Windows: invoke via Node `spawn` (argv array) — `dsh.cmd` breaks on
+  non-ASCII home paths through shell quoting.
+
+Verified on the wire (probe-result.json + committed session log):
+
+- `isolatedMount` — `agents.create({sessionId, meta, agentOptions, setup})`
+  built a sibling agent with its own session; `meta.cwd` placed the session
+  under the cwd-keyed store dir.
+- `modelRouting` — `request/header` carries
+  `config:{provider:'openrouter', model:…}` = the spec's route, confirmed
+  byte-for-byte.
+- `liveRestrict` — spec `tools.keep:['read']` → the emitted
+  `request/header.header.tools` list shrank from 25 names to exactly
+  `['read']` (whitelist on the wire, not a polite request).
+- `structuredLog` — `snapshotEvents()` returned 19 events seq 0–18 with the
+  documented SessionEventMap shapes (`agent/inbox/spliced`, `request/header`,
+  `request/context`, `assistant/message{usage}`, `turn/end{reason.kind}`).
+- `userSignal` — injected context (`system-reminder`, `runtime-context`,
+  `skill-catalog`) arrives as `user/message` with `source.kind` ≠ `user`;
+  the correction discriminator holds on real payloads.
+- Evidence: `delivered:true, finalText:'PROBE-OK', outcome:'ok',
+  tokens:7120–7295` for a tool-free turn (`steps:[]` is correct — no tool
+  calls, errors, or corrections occurred).
+- Committed log flushes lazily — `snapshotEvents` is authoritative during
+  the run; the on-disk zstd log lagged at seq 15 while memory held seq 18.
+- Host-shutdown race: a probe agent still running when the headless task
+  finishes gets `turn/end{kind:'aborted'}` — keep probe work inside the
+  main task's lifetime or it is torn down mid-flight.
+- `{{model}}` prompt variables: a mount with no `spec.model` dies at prompt
+  assembly ("prompt variable {{model}} has no value") — the adapter now
+  notes this at mount time.
+- `agentPresets` service is absent in the headless bundle (desktop profile
+  only) — preset-row mounting degrades with the honest note.

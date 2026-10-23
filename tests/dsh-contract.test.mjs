@@ -185,6 +185,26 @@ test('mount: setup applies sections + restrict + agentOptions atomically', async
   assert.equal(handle.agent.session._disposed, true)
 })
 
+test('mount: spec.model unset → honest note (live finding: {{model}} assembly fails without a route)', async () => {
+  const ctx = makeDshContext()
+  const sub = createDshSubstrate({ ctx })
+  const handle = await sub.mount({})
+  assert.ok(handle.notes.some((n) => n.includes('spec.model unset')), JSON.stringify(handle.notes))
+  assert.equal(handle.agent.session._options.agentOptions, undefined)
+  await sub.dispose(handle)
+})
+
+test('mount: tools.keep resolving to zero known names → no allow, noted (live: stale name not in universe)', async () => {
+  const ctx = makeDshContext()
+  const sub = createDshSubstrate({ ctx })
+  const handle = await sub.mount({ tools: { keep: ['definitely_not_a_tool'] } })
+  const agentCtx = handle.agent.session._agentCtx
+  assert.deepEqual(agentCtx._restricts, [])
+  assert.ok(handle.notes.some((n) => n.includes('definitely_not_a_tool')), JSON.stringify(handle.notes))
+  assert.ok(handle.notes.some((n) => n.includes('resolved to empty')), JSON.stringify(handle.notes))
+  await sub.dispose(handle)
+})
+
 test('mount: unknown tool names filtered to notes, never passed to restrict', async () => {
   const ctx = makeDshContext()
   const sub = createDshSubstrate({ ctx })

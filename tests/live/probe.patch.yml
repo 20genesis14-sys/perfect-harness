@@ -1,0 +1,45 @@
+# CLI --patch overlay for the headless profile.
+# Patch semantics (per --dump-config-schema): non-insert entries replace
+# supplied fields on the matching id; config is replaced wholesale.
+# Inserted relative plugin paths are anchored beside THIS file.
+
+# 1. Point the openrouter provider at a cheap model list (replaces the
+#    empty/undeclared config in the stock headless stack).
+- id: llm-pi-ai
+  config:
+    providers:
+      openrouter:
+        api: openai-completions
+        models:
+          - id: deepseek/deepseek-v4.1-flash-1017
+            name: "DeepSeek: DeepSeek V4.1 Flash 1017"
+            contextWindow: 1048576
+            maxTokens: 393216
+            input:
+              - text
+          - id: minimax/minimax-m3.1-flash:free
+            name: "MiniMax: MiniMax M3.1 Flash (free)"
+            contextWindow: 1000000
+            maxTokens: 524288
+            input:
+              - text
+        apiKeyEnv: OPENROUTER_API_KEY
+
+# 2. Headless default route: deepseek-official wants DEEPSEEK_API_KEY which
+#    is not stored; openrouter resolves through the shared credentials store.
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: deepseek/deepseek-v4.1-flash-1017
+
+# 3. The headless bundle disables the local credentials store; re-enable it
+#    so apiKeyEnv refs resolve through ~/.dsh/.credentials.yaml.
+- id: credentials
+  disabled: false
+
+# 4. Mount the live probe beside the headless app.
+- insert:
+    - id: ph-live-probe
+      name: ./probe-plugin.js
+      config:
+        out: 'D:/PerfectHarness/tests/live/probe-result.json'
