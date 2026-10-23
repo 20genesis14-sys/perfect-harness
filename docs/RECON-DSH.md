@@ -306,6 +306,17 @@ Findings the live run exposed, now encoded:
   desktop profile — the desktop app cannot be driven headlessly from
   here; verified at the contract level (mocked service + real source
   shapes) only.
+- **Free-model routes verified live** (2025-10-23, OpenRouter catalog):
+  `thinkingmachines/inkling:free` and `openrouter/free` (auto-picks a
+  working free model) both completed REAL tool-calling runs at $0 —
+  `nvidia/nemotron-3-super-120b-a12b:free` 404'd at NVIDIA's backend and
+  `google/gemma-4-31b-it:free` produced no final; free capacity is
+  volatile — probe before relying. `tests/live/free.patch.yml` carries
+  the verified recipe. Note: `api` is a ROUTE-level field in llm-pi-ai
+  (`request.api ?? catalog.api ?? routeApi`); a model the installed
+  catalog doesn't describe fails at mount with "needs an api" — provider
+  config must set `api: openai-completions` (correct for every OpenRouter
+  model — the endpoint speaks one wire protocol).
 - **Instruction-dominance finding**: injected spec-level flaws (forced
   greeting, French-only, no-tools) did NOT degrade live outcomes — the
   model prioritized the task prompt over `ph:guidance` sections every

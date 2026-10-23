@@ -1,0 +1,31 @@
+# Free-route test patch — verified live: thinkingmachines/inkling:free and
+# openrouter/free both completed tool-calling runs at $0. Nvidia/gemma free
+# endpoints 404'd on this account at test time — free capacity is volatile,
+# keep both working ids below.
+- id: llm-pi-ai
+  config:
+    providers:
+      openrouter:
+        api: openai-completions
+        models:
+          - id: thinkingmachines/inkling:free
+            name: "Thinking Machines: Inkling (free)"
+            contextWindow: 1048576
+            maxTokens: 131072
+            input:
+              - text
+          - id: openrouter/free
+            name: "OpenRouter: Free (auto)"
+            contextWindow: 200000
+            maxTokens: 131072
+            input:
+              - text
+        apiKeyEnv: OPENROUTER_API_KEY
+
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: openrouter/free
+
+- id: credentials
+  disabled: false
