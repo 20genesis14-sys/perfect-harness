@@ -214,3 +214,26 @@ Findings the live run exposed, now encoded:
   — the channel prompts elicit real harness reasoning, not noise.
 - A full step with all-identical deliverables selects nothing and keeps
   the base — the gate's honest "no separation" outcome, not a failure.
+- **scripts semantics (empirically settled)**: DSH's native "script" is the
+  `workflow` tool's model-authored JS body (`dsh-workflow` — agent()/
+  parallel()/pipeline()/phase() hooks, ephemeral per call). A Harness²
+  "script" (a harness-CARRIED helper) materializes differently: as a cordis
+  `.mjs` plugin row in the preset — exactly how the real
+  `.agent-presets/custom/` preset carries `prompt-reader.mjs`/`prompt-tool.mjs`.
+  Rule measured by dsh-custom-mode: registered presets reject RELATIVE
+  specifiers (`broken: never started`) — the adapter resolves `scripts.x`
+  source strings to scratch `.mjs` files under the mount cwd
+  (`.ph-scripts/x.mjs`) and ANY row `name: './rel.mjs'` to an absolute
+  `file://` URL before `register()`. Live-verified: `scripts.ph-echo`
+  materialized + landed as row 25 in the registered temp preset.
+- **Service-registration timing**: `ctx.get('agentPresets')` may return
+  nothing at `agent/created` time yet be present minutes later — cordis
+  services register as plugins load. The substrate now re-probes seams at
+  EVERY mount (`capabilities()` remains the create-time snapshot — honest
+  "what we knew when asked").
+- **`dsh headless --json` output verified**: one JSON object per line —
+  `{type:session,sessionId,cwd}`, `{type:status,phase:turn_start|
+  step_start|step_end|turn_end,turn,step,usage,reason}`,
+  `{type:text,text}`, `{type:final,text}` — sufficient to rebuild canonical
+  Evidence for external process isolation. `dsh headless` is single-shot
+  by design ("answer one task and exit"); no interactive stdin mode.

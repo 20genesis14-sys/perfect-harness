@@ -5,3 +5,6 @@ node_modules/
 Thumbs.db
 tests/live/*.json
 !.gitkeep
+.ph-scripts/
+tests/live/ESSAY.md
+tests/live/REVIEW.md

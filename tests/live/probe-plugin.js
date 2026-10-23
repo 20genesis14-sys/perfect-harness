@@ -73,9 +73,11 @@ export function apply(ctx, config = {}) {
         // steps must land before the cheaper already-proven checks.
         let lessonCheck = { skipped: true }
         try {
+          const chNotes = []
           const ch = createDshChannels({
             substrate: sub,
             spec: { model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' } },
+            notes: chNotes,
           })
           const store = createFileLessonStore('D:/PerfectHarness/tests/live/lessons.json')
           const library = await store.load()
@@ -103,6 +105,7 @@ export function apply(ctx, config = {}) {
             selection: step.trail.selection && { reason: step.trail.selection.reason, confidence: step.trail.selection.confidence, adoptIndex: step.trail.selection.adoptIndex },
             lesson: step.lesson,
             evidences: step.trail.evidences.map((e) => ({ label: e.label, outcome: e.evidence.outcome, final: e.evidence.deliverable?.finalText?.slice(0, 80) })),
+            channelNotes: chNotes,
           }
         } catch (e) { lessonCheck = { error: String(e?.stack ?? e) } }
 
@@ -110,9 +113,11 @@ export function apply(ctx, config = {}) {
         // probe, compose, blind-select, gate, reflect, all on the real host.
         let loopCheck = { skipped: true }
         try {
+          const chNotes = []
           const ch = createDshChannels({
             substrate: sub,
             spec: { model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' } },
+            notes: chNotes,
           })
           // Same library + same domain → selectFor serves the lesson written
           // by lessonCheck (prefix rule: later task in the same domain).
@@ -137,6 +142,7 @@ export function apply(ctx, config = {}) {
             notes: step.notes, proposals: step.trail.proposals.map((p) => p.description),
             selection: step.trail.selection, lesson: step.lesson && { cue: step.lesson.cue, lesson: step.lesson.lesson },
             evidences: step.trail.evidences.map((e) => ({ label: e.label, outcome: e.evidence.outcome, final: e.evidence.deliverable?.finalText?.slice(0, 60) })),
+            channelNotes: chNotes,
           }
         } catch (e) { loopCheck = { error: String(e?.stack ?? e) } }
 
@@ -240,10 +246,17 @@ export function apply(ctx, config = {}) {
               presetCheck.readDocumentServesRegistered = typeof docBack?.content === 'string' && docBack.content.length > 0
             } catch (e) { presetCheck.readDocumentServesRegistered = 'threw: ' + String(e?.message ?? e).slice(0, 120) }
             const h4 = await sub.mount(
-              { ...spec, skills: { 'skill-fs': { name: '@deepseek-ai/dsh-skill-filesystem' } } },
+              {
+                ...spec,
+                skills: { 'skill-fs': { name: '@deepseek-ai/dsh-skill-filesystem' } },
+                // scripts → scratch .mjs → file:// row (prompt-reader.mjs pattern)
+                scripts: { 'ph-echo': 'export const name = "ph-echo"\nexport function apply() {}\n' },
+              },
               { basePreset: 'ph-base' })
             presetCheck.notes = h4.notes
             presetCheck.mount = sub.describeMount(h4)
+            const { existsSync } = await import('node:fs')
+            presetCheck.scriptFile = existsSync('D:/PerfectHarness/tests/live/.ph-scripts/ph-echo.mjs')
             await sub.dispose(h4) // runs presetDispose — live-suspect #1
             // Hazard isolation: did disposing the mounted preset kill the
             // shared agent factory? Sanity-mount before disposing ph-base.

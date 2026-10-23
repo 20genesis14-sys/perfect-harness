@@ -357,22 +357,63 @@ test('mount: preset path clones base + overlays spec rows, meta.agentPreset set'
       'skill-empty': {},                                      // empty — noted, skipped
     },
     agents: { 'sub-x': { name: '@deepseek-ai/dsh-subagent' } },
-    scripts: { 'run.sh': 'echo hi' },                         // file-plane — noted
+    scripts: { 'run.sh': 'echo hi' },                         // non-object — noted
   })
   const meta = handle.agent.session._options.meta
   assert.ok(meta.agentPreset.startsWith('ph-probe-'))
   const def = ctx.get('agentPresets')._registered.get(meta.agentPreset)
   assert.ok(def, 'probe preset registered')
   const plugins = def.plugins
-  assert.equal(plugins.length, 5) // 3 base + 2 new (skill-custom + sub-x)
+  assert.equal(plugins.length, 6) // 3 base + skill-custom + sub-x + run.sh script row
   assert.equal(plugins.find((r) => r.id === 'skill-filesystem').disabled, true)
   assert.equal(plugins.find((r) => r.id === 'skill-custom').config.x, 1)
   assert.ok(plugins.some((r) => r.id === 'sub-x'))
+  assert.ok(plugins.find((r) => r.id === 'run.sh').name.startsWith('file:///'), 'script materialized')
   assert.ok(!plugins.some((r) => r.id === 'skill-bad' || r.id === 'skill-empty'))
   assert.ok(handle.notes.some((n) => n.includes('skill-bad')))
-  assert.ok(handle.notes.some((n) => n.includes('scripts')))
   await sub.dispose(handle)
   assert.ok(!ctx.get('agentPresets')._registered.has(meta.agentPreset), 'preset unmounted on dispose')
+  const { rmSync } = await import('node:fs')
+  rmSync('.ph-scripts', { recursive: true, force: true }) // scratch dir cleanup
+})
+
+test('mount: scripts materialize as file:// preset rows under mount cwd', async () => {
+  const { mkdtempSync, readFileSync, rmSync, existsSync } = await import('node:fs')
+  const { tmpdir } = await import('node:os')
+  const { join } = await import('node:path')
+  const cwd = mkdtempSync(join(tmpdir(), 'ph-scripts-'))
+  try {
+    const baseRows = [{ id: 'tool-fs', name: '@deepseek-ai/dsh-tool-fs' }]
+    const ctx = makeDshContext({ baseRows })
+    const sub = createDshSubstrate({
+      ctx,
+      deps: { parsePresetYaml: () => baseRows.map((r) => ({ ...r })) },
+      opts: { basePreset: 'standard', cwd },
+    })
+    const handle = await sub.mount({
+      scripts: {
+        'helper-one': 'export function apply() {}\n',      // → scratch .mjs → file:// row
+      },
+      skills: {
+        'helper-two': { name: './vendor/tool.mjs' },       // → resolved file:// under cwd
+        'helper-off': { disabled: true },                  // overlay row, no specifier needed
+      },
+    })
+    const meta = handle.agent.session._options.meta
+    const def = ctx.get('agentPresets')._registered.get(meta.agentPreset)
+    const plugins = def.plugins
+    const one = plugins.find((r) => r.id === 'helper-one')
+    const two = plugins.find((r) => r.id === 'helper-two')
+    const off = plugins.find((r) => r.id === 'helper-off')
+    assert.ok(one.name.startsWith('file:///'), `content→file URL, got ${one.name}`)
+    assert.ok(existsSync(join(cwd, '.ph-scripts', 'helper-one.mjs')), 'scratch file written')
+    assert.equal(readFileSync(join(cwd, '.ph-scripts', 'helper-one.mjs'), 'utf8'), 'export function apply() {}\n')
+    assert.ok(two.name.startsWith('file:///') && two.name.endsWith('vendor/tool.mjs'), `path→abs file URL, got ${two.name}`)
+    assert.equal(off.disabled, true)
+    await sub.dispose(handle)
+  } finally {
+    rmSync(cwd, { recursive: true, force: true })
+  }
 })
 
 test('mount: preset rows without agentPresets seam → honest notes, still mounts', async () => {
