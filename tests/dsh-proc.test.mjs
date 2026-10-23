@@ -39,6 +39,18 @@ test('evidenceFromNdjson: real stream → canonical evidence', () => {
   assert.equal(ev.stats.wallS, 4)
 })
 
+test('evidenceFromNdjson: priced route → costUsd from the LAST cumulative split', () => {
+  const ev = evidenceFromNdjson(REAL_STREAM, {
+    taskId: 't', domain: 'd', prompt: 'p',
+    pricing: { input: 1, output: 10, cacheRead: 0.001 }, // $/Mtok, test rates
+  })
+  // last usage record: in 2152, out 5, cacheRead 5120
+  const want = (2152 / 1e6) * 1 + (5 / 1e6) * 10 + (5120 / 1e6) * 0.001
+  assert.equal(ev.stats.costUsd, +want.toFixed(8))
+  const unpriced = evidenceFromNdjson(REAL_STREAM, { taskId: 't', domain: 'd', prompt: 'p' })
+  assert.equal(unpriced.stats.costUsd, 0)
+})
+
 test('evidenceFromNdjson: aborted turn → aborted outcome; error status → error step', () => {
   const stream = [
     { type: 'session', sessionId: 's1' },

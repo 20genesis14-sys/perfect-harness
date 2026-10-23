@@ -340,6 +340,17 @@ test('evidenceFromEvents: real ptc-dispatch payload shapes (verified from dsh-to
   assert.equal(ev.stats.toolCalls, 2) // run_code + one dispatch-start; results don't re-count
 })
 
+test('evidenceFromEvents: pricing computes costUsd from the real token split', () => {
+  const mk = (pricing) => evidenceFromEvents([
+    { seq: 0, time: 1, type: 'assistant/message', data: { message: { content: [{ type: 'text', text: 'x' }] }, usage: { inputTokens: 1_000_000, outputTokens: 500_000, cacheReadTokens: 1_000_000 } } },
+  ], { runId: 'r', specHash: 'h', task: { id: 't', domain: 'd', prompt: 'p' }, pricing })
+  // openrouter deepseek-v4.1-flash-1017 base: $0.30/$1.20/$0.006 per Mtok
+  const priced = mk({ input: 0.3, output: 1.2, cacheRead: 0.006, cacheWrite: 0.3 })
+  assert.equal(priced.stats.costUsd, +(0.3 + 0.6 + 0.006).toFixed(8))
+  assert.equal(priced.stats.tokens, 2_500_000)
+  assert.equal(mk(null).stats.costUsd, 0) // unpriced route → 0, never guessed
+})
+
 test('evidenceFromEvents: seq 0 action survives (host seqs are 0-based)', () => {
   const ev = evidenceFromEvents([
     { seq: 0, time: 1, type: 'tool/call', data: { turn: 1, step: 1, callId: 'c', name: 'fs_read', arguments: '{}' } },
@@ -546,9 +557,24 @@ test('channels.propose: parses JSON array, drops patchless items, never throws',
 
 test('channels.propose: unparseable reply → [] + note', async () => {
   const notes = []
-  const ch = createDshChannels({ substrate: channelSubstrate({ 'ch-propose': 'no json here' }), notes })
+  const ch = createDshChannels({ substrate: channelSubstrate({ 'ch-propose': 'no json here' }), notes, retries: 0 })
   assert.deepEqual(await ch.propose({ task: {}, spec: {}, lessons: [] }), [])
   assert.ok(notes.some((n) => n.includes('unparseable')))
+})
+
+test('channels: retry-on-unparseable recovers valid JSON on re-ask', async () => {
+  let calls = 0
+  const sub = channelSubstrate(() => (++calls === 1 ? 'sorry, prose not json' : '[{"patch":{"prompt":{"guidance":"x"}}}]'))
+  const ch = createDshChannels({ substrate: sub, retries: 1 })
+  const out = await ch.propose({ task: {}, spec: {}, lessons: [] })
+  assert.equal(out.length, 1)
+  assert.equal(calls, 2)
+  // reflect: 'NONE' is a legitimate null, NOT a parse failure — no retry
+  let noneCalls = 0
+  const sub2 = channelSubstrate(() => { noneCalls++; return 'NONE' })
+  const ch2 = createDshChannels({ substrate: sub2, retries: 3 })
+  assert.equal(await ch2.reflect({ task: {} }), null)
+  assert.equal(noneCalls, 1)
 })
 
 test('channels.compose: {patch} only; bare object → null', async () => {

@@ -274,6 +274,22 @@ Findings the live run exposed, now encoded:
   {improved, baseKept, adoptionRate, lessonsWritten, wallMs}. Live on proc
   substrate: 3 tasks × ~10 spawned processes each — all steps completed,
   base kept honestly every time.
+- **Usage→cost pricing** (`lib/adapters/dsh/pricing.js`): OpenRouter rates
+  read live from `/api/v1/models` (deepseek-v4.1-flash-1017 base $0.30 in /
+  $1.20 out / $0.006 cacheRead per Mtok; time-windowed overrides exist —
+  stored rate is the BASE, costUsd is an upper bound). Token split is REAL:
+  `usage.inputTokens/outputTokens/cacheReadTokens/cacheWriteTokens` are
+  disjoint counts in both session-log `assistant/message` and NDJSON
+  `status step_end` (cumulative — last record wins). Unpriced route →
+  costUsd 0, never guessed. Live-verified: 7272 tok → $0.0004156.
+- **Channel retry**: `createDshChannels({retries})` re-asks on unparseable
+  JSON (propose/compose/reflect); reflect's `NONE` is a legitimate null —
+  no retry burned.
+- **composeStrategy** (`runImprovementStep` opt): `'model'` (channel merge),
+  `'union'` (deterministic disjoint-leaf merge — a leaf adopted iff every
+  candidate that touches it agrees; conflicts reported, stay on base),
+  `'model-else-union'` (fallback when channel absent/fails/{}). Union has
+  NO verdict input — ranking disagreement defers to selection.
 - **Instruction-dominance finding**: injected spec-level flaws (forced
   greeting, French-only, no-tools) did NOT degrade live outcomes — the
   model prioritized the task prompt over `ph:guidance` sections every

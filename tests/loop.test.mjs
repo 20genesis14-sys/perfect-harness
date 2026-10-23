@@ -164,3 +164,17 @@ test('no propose channel → evidence-collection only, still ok', async () => {
   assert.equal(r.improved, false)
   assert.ok(r.notes.some((n) => n.includes('no propose channel')))
 })
+
+test('composeStrategy union: agreed candidate leaves merge without a compose channel', async () => {
+  const substrate = createMockSubstrate({ capabilities: { isolatedMount: true, modelRouting: true }, script: behaviorScript })
+  const p1 = { kind: 'domain', description: 'web on', patch: { tools: { keep: ['fs_read', 'web_search'] }, prompt: { guidance: 'g' } } }
+  const p2 = { kind: 'domain', description: 'persona', patch: { prompt: { persona: 'senior' } } }
+  const channels = createScriptedChannels({ proposals: [p1, p2], judge: judgePrefersBetter, lesson: () => null })
+  const r = await runImprovementStep({ task, baseSpec: spec(), substrate, channels, composeStrategy: 'union' })
+  assert.equal(r.ok, true)
+  // disjoint leaves (keep from p1, persona from p2) merged into refined
+  assert.deepEqual(r.trail.proposals.length, 2)
+  const refined = r.trail.evidences.find((e) => e.label === 'refined')
+  assert.ok(refined, 'a refined rollout must exist')
+  assert.ok(r.notes.some((n) => n.includes('compose[union]')))
+})

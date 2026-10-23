@@ -2,6 +2,7 @@ import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import {
   normalizeSpec, specHash, patchPaths, applyPatch, diffSpecs, formatDiff, stableStringify,
+  composeUnionDisjoint,
 } from '../lib/core/spec.js'
 
 test('normalizeSpec: empty spec is valid; unknown sections rejected', () => {
@@ -99,4 +100,39 @@ test('diffSpecs produces leaf-level added/removed/changed', () => {
 test('stableStringify: key order does not change output; array order does', () => {
   assert.equal(stableStringify({ b: 1, a: { d: [2] } }), stableStringify({ a: { d: [2] }, b: 1 }))
   assert.notEqual(stableStringify([1, 2]), stableStringify([2, 1]))
+})
+
+test('composeUnionDisjoint: agreed leaves merge, absent-section removes conflict', () => {
+  const base = { prompt: { guidance: 'neutral', persona: 'dev' }, tools: { keep: ['read'] } }
+  const c1 = { prompt: { guidance: 'terse', persona: 'dev' }, tools: { keep: ['read', 'grep'] }, memory: 'm1' }
+  const c2 = { prompt: { guidance: 'terse', persona: 'senior' }, tools: { hide: ['bash'] } }
+  const { patch, adopted, conflicts } = composeUnionDisjoint(base, [c1, c2])
+  // agreed: guidance='terse' (both), persona='senior' (c1 untouched = consent),
+  // hide (only c2), memory (only c1)
+  assert.equal(patch.prompt.guidance, 'terse')
+  assert.equal(patch.prompt.persona, 'senior')
+  assert.deepEqual(patch.tools.hide, ['bash'])
+  assert.equal(patch.memory, 'm1')
+  // REAL conflict: c2's absent tools section means keep is REMOVED there —
+  // c1 changes it, c2 deletes it → stays on base, reported.
+  assert.equal(patch.tools.keep, undefined)
+  assert.deepEqual(conflicts, ['tools.keep'])
+})
+
+test('composeUnionDisjoint: real conflict stays off the patch', () => {
+  const base = { prompt: { guidance: 'g0' } }
+  const c1 = { prompt: { guidance: 'g1' } }
+  const c2 = { prompt: { guidance: 'g2' } }
+  const { patch, conflicts } = composeUnionDisjoint(base, [c1, c2])
+  assert.deepEqual(patch, {})
+  assert.deepEqual(conflicts, ['prompt.guidance'])
+})
+
+test('composeUnionDisjoint: pinned agreed leaf is refused + reported', () => {
+  const base = { tools: { keep: ['read'] } }
+  const c1 = { tools: { keep: ['read', 'bash'] } }
+  const { patch, adopted, conflicts } = composeUnionDisjoint(base, [c1], { pins: ['tools.keep'] })
+  assert.deepEqual(patch, {})
+  assert.deepEqual(adopted, [])
+  assert.match(conflicts[0], /pinned/)
 })
