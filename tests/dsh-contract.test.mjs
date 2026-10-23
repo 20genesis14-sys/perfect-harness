@@ -318,6 +318,28 @@ test('run: real-shape edge cases — isError result, string args file, aborted, 
   await sub.dispose(handle)
 })
 
+test('evidenceFromEvents: real ptc-dispatch payload shapes (verified from dsh-tools source)', () => {
+  // Source: dsh-tools/lib/types/ptc.js — ptc-dispatch-start carries
+  // {rootCallId,parentCallId,subCallId,name,arguments}; ptc-dispatch adds
+  // {isError,error?,content,meta?} — content is ContentBlock[]/string.
+  const ev = evidenceFromEvents([
+    // Real live seq order: run_code call → ptc-dispatch-start → ptc-dispatch → tool/result.
+    { seq: 0, time: 0, type: 'tool/call', data: { turn: 1, step: 1, callId: 'c1', name: 'run_code', arguments: '{"code":"await tools.read()"}' } },
+    { seq: 1, time: 1, type: 'tool/ptc-dispatch-start', data: { rootCallId: 'c1', parentCallId: 'c1', subCallId: 'c1:ptc:1', name: 'read', arguments: { file_path: 'a.txt' } } },
+    { seq: 2, time: 2, type: 'tool/ptc-dispatch', data: { rootCallId: 'c1', parentCallId: 'c1', subCallId: 'c1:ptc:1', name: 'read', arguments: { file_path: 'a.txt' }, isError: false, content: [{ type: 'text', text: 'file body' }] } },
+    { seq: 3, time: 3, type: 'tool/ptc-dispatch', data: { rootCallId: 'c1', parentCallId: 'c1', subCallId: 'c1:ptc:2', name: 'pwsh', arguments: {}, isError: true, error: { code: 'EACCES', reason: 'path outside root' }, content: [{ type: 'text', text: 'denied' }] } },
+    { seq: 4, time: 4, type: 'tool/result', data: { message: { toolCallId: 'c1', content: [{ type: 'text', text: 'AAA' }] } } },
+  ], { runId: 'r', specHash: 'h', task: { id: 't', domain: 'd', prompt: 'p' } })
+  assert.deepEqual(ev.steps.map((s) => s.kind), ['action', 'action', 'observation', 'error', 'observation'])
+  assert.equal(ev.steps[0].tool, 'run_code')
+  assert.equal(ev.steps[1].tool, 'read')
+  assert.match(ev.steps[1].input, /a\.txt/)
+  assert.match(ev.steps[2].text, /file body/)
+  assert.match(ev.steps[3].text, /denied[\s\S]*EACCES.*path outside root/)
+  assert.equal(ev.steps[3].tool, 'pwsh')
+  assert.equal(ev.stats.toolCalls, 2) // run_code + one dispatch-start; results don't re-count
+})
+
 test('evidenceFromEvents: seq 0 action survives (host seqs are 0-based)', () => {
   const ev = evidenceFromEvents([
     { seq: 0, time: 1, type: 'tool/call', data: { turn: 1, step: 1, callId: 'c', name: 'fs_read', arguments: '{}' } },

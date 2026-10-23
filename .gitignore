@@ -8,3 +8,6 @@ tests/live/*.json
 .ph-scripts/
 tests/live/ESSAY.md
 tests/live/REVIEW.md
+tests/live/a.txt
+tests/live/b.txt
+tests/live/c.txt

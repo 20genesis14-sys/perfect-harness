@@ -94,8 +94,26 @@ Bonus vocab beyond base types (plugin-merged events): `job/*`, `compaction/*`,
   mount plan must distinguish "tool didn't exist" from "tool can't hide".
 - `appendPluginRecord` is experimental API (gate lives in their build) —
   usable, but keep the file-lesson fallback wired behind the flag.
-- `tools/ptc-dispatch[-start]` events exist under PTC mode — evidence must
-  merge them into steps or PTC runs look tool-less.
+- `tool/ptc-dispatch[-start]` events — VERIFIED LIVE under PTC mode:
+  activation = `tools.config.mode` (`native`|`ptc`), in headless driven by
+  env `DSH_TOOLS_MODE=ptc` (dsh-headless cordis.patch.yml) or per-preset
+  via `@deepseek-ai/dsh-agent-tool-presentation` `{mode:'ptc'}` (the
+  `preset-ptc` preset in dsh-web-app/presets). Requires `ptcRuntime`
+  service — `@deepseek-ai/dsh-ptc-runtime-node` row already sits in
+  dsh-base, so headless needs only the env var. Under ptc, `run_code` is
+  the ONLY model-visible tool (native schemas omitted from the request);
+  `tools.restrict()` may not name it (reserved). Real seq order observed:
+  `tool/call run_code` → `ptc-dispatch-start` → `ptc-dispatch` →
+  `tool/result`. Payloads (dsh-tools/types/ptc.js + live log):
+  start = `{rootCallId,parentCallId,subCallId,name,arguments(object!)}`;
+  dispatch adds `{isError,error?:{code,reason},content:ContentBlock[],
+  meta?}` — arguments arrive as OBJECTS (unlike `tool/call` JSON strings).
+  Evidence mapping: start → `action` (inner tool+args, counts toolCalls),
+  dispatch → `observation`|`error` by `isError` (text from `content`
+  blocks + `[CODE: reason]` suffix). The outer `tool/result` on run_code
+  still arrives normally — model-visible program output.
+- `tools/ptc-dispatch-log` waterfall exists for host-side redaction of
+  logged dispatch content (listener may replace the durable copy).
 - `setup` is trusted same-process code: mount everything there; drive only
   after `agents.create` resolves (queued input is held until then).
 
