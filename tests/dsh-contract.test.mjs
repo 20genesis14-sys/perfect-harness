@@ -124,6 +124,7 @@ function makeDshContext({ withAgents = true, scripted = null, baseRows = null } 
       listeners.get(event).push(handler)
       return () => listeners.set(event, listeners.get(event).filter((h) => h !== handler))
     },
+    _services: services,
     _sessions: sessions,
     _emit: emit,
     _makeSession: makeSession,
@@ -448,4 +449,114 @@ test('full improvement loop over DSH substrate (routed selector → auto gate)',
   assert.equal(result.adoptedSpec.prompt.guidance, 'terse')
   // every rollout produced real DSH evidence with session-backed runIds
   assert.ok(result.trail.evidences.every((e) => e.evidence.runId.startsWith('dsh:ph-probe-')))
+})
+
+// ── live channel contract (mock substrate, parser-level verification) ─────
+
+import { createDshChannels } from '../lib/adapters/dsh/channels.js'
+
+/** Mock substrate whose run() returns a scripted deliverable per prompt id. */
+function channelSubstrate(script = {}) {
+  const mounted = []
+  return {
+    mounted,
+    async mount(spec) { const h = { spec, id: `h-${mounted.length}` }; mounted.push(h); return h },
+    async run(handle, task) {
+      handle.task = task
+      const reply = typeof script === 'function' ? script(task) : (script[task.id] ?? '')
+      return { deliverable: { finalText: reply }, outcome: 'ok' }
+    },
+    async dispose(h) { h.disposed = true },
+  }
+}
+
+test('channels.propose: parses JSON array, drops patchless items, never throws', async () => {
+  const sub = channelSubstrate({ 'ch-propose': 'Here are ideas:\n```json\n[{"description":"add persona","patch":{"prompt":{"persona":"senior"}}},{"description":"bad"},{"description":"tighten","patch":{"prompt":{"guidance":"terse"}},"kind":"invariant"}]\n```' })
+  const ch = createDshChannels({ substrate: sub, spec: { model: { provider: 'x', model: 'y' } } })
+  const out = await ch.propose({ task: { prompt: 't' }, spec: {}, baseTrajectory: 'traj', lessons: [] })
+  assert.equal(out.length, 2)
+  assert.equal(out[0].description, 'add persona')
+  assert.equal(out[1].kind, 'invariant')
+  assert.equal(sub.mounted.length, 1)
+  assert.equal(sub.mounted[0].disposed, true) // every ask disposes its mount
+})
+
+test('channels.propose: unparseable reply → [] + note', async () => {
+  const notes = []
+  const ch = createDshChannels({ substrate: channelSubstrate({ 'ch-propose': 'no json here' }), notes })
+  assert.deepEqual(await ch.propose({ task: {}, spec: {}, lessons: [] }), [])
+  assert.ok(notes.some((n) => n.includes('unparseable')))
+})
+
+test('channels.compose: {patch} only; bare object → null', async () => {
+  const ch = createDshChannels({ substrate: channelSubstrate({ 'ch-compose': '{"patch":{"prompt":{"guidance":"merged"}}}' }) })
+  assert.deepEqual(await ch.compose({ task: {}, baseTrajectory: '', entries: [] }), { patch: { prompt: { guidance: 'merged' } } })
+  const ch2 = createDshChannels({ substrate: channelSubstrate({ 'ch-compose': '{"foo":1}' }) })
+  assert.equal(await ch2.compose({ task: {}, entries: [] }), null)
+})
+
+test('channels.select: strict token parse; garbage → tie; mount per call', async () => {
+  const sub = channelSubstrate((task) => ({ 'ch-select': 'A' }[task.id]))
+  const ch = createDshChannels({ substrate: sub })
+  assert.equal(await ch.select('x', 'y'), 'A')
+  const ch2 = createDshChannels({ substrate: channelSubstrate({ 'ch-select': 'the answer is probably A but B has merits' }) })
+  assert.equal(await ch2.select('x', 'y'), 'tie') // leading non-token → honest tie, not a guess
+  const ch3 = createDshChannels({ substrate: channelSubstrate({ 'ch-select': '  tie.' }) })
+  assert.equal(await ch3.select('x', 'y'), 'TIE')
+})
+
+test('channels.reflect: valid draft → normalized; NONE/missing lesson → null', async () => {
+  const ch = createDshChannels({ substrate: channelSubstrate({ 'ch-reflect': '{"cue":"when X","lesson":"do Y","evidence":[{"runId":"r1","seq":3}]}' }) })
+  const draft = await ch.reflect({ task: {}, diffs: 'd' })
+  assert.equal(draft.lesson, 'do Y')
+  assert.deepEqual(draft.evidence, [{ runId: 'r1', seq: 3 }])
+  const chNone = createDshChannels({ substrate: channelSubstrate({ 'ch-reflect': 'NONE' }) })
+  assert.equal(await chNone.reflect({ task: {} }), null)
+})
+
+test('channels: mount failure surfaces as rejection (caller notes it)', async () => {
+  const ch = createDshChannels({ substrate: { mount: async () => { throw new Error('no factory') } } })
+  await assert.rejects(() => ch.select('a', 'b'), /no factory/)
+})
+
+test('channels: dot-notation patches unflatten into spec nesting (live finding)', async () => {
+  const sub = channelSubstrate({
+    'ch-compose': '{"patch":{"prompt.systemAppend":"guard","tools.keep":["read"],"prompt":{"guidance":"x"}}}',
+    'ch-propose': '[{"patch":{"model.effort":"low"}},{"patch":{"prompt.guidance":"y"}}]',
+  })
+  const ch = createDshChannels({ substrate: sub })
+  const composed = await ch.compose({ task: {}, entries: [] })
+  assert.deepEqual(composed.patch, { prompt: { systemAppend: 'guard', guidance: 'x' }, tools: { keep: ['read'] } })
+  const props = await ch.propose({ task: {}, spec: {}, lessons: [] })
+  assert.deepEqual(props[0].patch, { model: { effort: 'low' } })
+  assert.deepEqual(props[1].patch, { prompt: { guidance: 'y' } })
+})
+
+test('mount: effort reconciled against resolveModelInfo — undeclared → nearest positive', async () => {
+  const ctx = makeDshContext()
+  ctx._services.llm = { resolveModelInfo: async () => ({ reasoning: { efforts: [{ id: 'medium' }, { id: 'high' }], defaultEffort: 'medium' } }) }
+  const sub = createDshSubstrate({ ctx })
+  const handle = await sub.mount({ model: { provider: 'openrouter', model: 'm1', effort: 'low' } })
+  assert.equal(handle.agent.session._options.agentOptions.reasoningEffort, 'medium')
+  assert.ok(handle.notes.some((n) => n.includes('undeclared')))
+  await sub.dispose(handle)
+})
+
+test('mount: effort omitted when route declares no reasoning support', async () => {
+  const ctx = makeDshContext()
+  ctx._services.llm = { resolveModelInfo: async () => ({ reasoning: null }) }
+  const sub = createDshSubstrate({ ctx })
+  const handle = await sub.mount({ model: { provider: 'openrouter', model: 'm1', effort: 'low' } })
+  assert.equal(handle.agent.session._options.agentOptions.reasoningEffort, undefined)
+  assert.ok(handle.notes.some((n) => n.includes('no reasoning')))
+  await sub.dispose(handle)
+})
+
+test('mount: resolveModelInfo failure leaves the effort untouched (never guess)', async () => {
+  const ctx = makeDshContext()
+  ctx._services.llm = { resolveModelInfo: async () => { throw new Error('adapter down') } }
+  const sub = createDshSubstrate({ ctx })
+  const handle = await sub.mount({ model: { provider: 'openrouter', model: 'm1', effort: 'low' } })
+  assert.equal(handle.agent.session._options.agentOptions.reasoningEffort, 'low')
+  await sub.dispose(handle)
 })

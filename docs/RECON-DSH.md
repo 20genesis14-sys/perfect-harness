@@ -159,3 +159,27 @@ Verified on the wire (probe-result.json + committed session log):
   under `ELECTRON_RUN_AS_NODE`; plain Node cannot). Production plugins
   installed into the profile's `node_modules` resolve the same copies the
   host loads, so this only bites out-of-profile mounts like this probe.
+
+## Live improvement loop (full Harness² step on the wire)
+
+`runImprovementStep` ran end-to-end with `createDshChannels` (fresh mounted
+agent per call): 3 real model proposals → 3 candidate probes → 6 pairwise
+blind judgments → gate kept base (tally 2/2/2/0, confidence low — identical
+deliverables honestly tie). Loop cost ≈ 8 routed calls.
+
+Findings the live run exposed, now encoded:
+
+- **Dot-notation patches**: models emit `{"prompt.systemAppend": "…"}`;
+  `normalizeSpec` correctly rejects the dotted top-level key, so channels
+  unflatten patches before returning (real keys win over expanded ones).
+- **UNSUPPORTED_REASONING_EFFORT**: a proposal lowering `model.effort`
+  failed the whole probe at dispatch (`turn/end{kind:'error'}`). mount()
+  now reconciles effort against `llm.resolveModelInfo(provider, model)
+  .reasoning` — undeclared positive requests move to the nearest declared
+  positive level, reasoning-less routes get the field omitted, unreachable
+  metadata leaves the spec untouched (tier-router's rule: never guess).
+- Proposals were semantically sensible harness edits (verbatim-output
+  guard, tool-surface removal for a single-token task, effort reduction)
+  — the channel prompts elicit real harness reasoning, not noise.
+- A full step with all-identical deliverables selects nothing and keeps
+  the base — the gate's honest "no separation" outcome, not a failure.

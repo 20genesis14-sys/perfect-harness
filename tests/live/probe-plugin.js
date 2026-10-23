@@ -4,6 +4,8 @@
 // probe agent's creation is ignored by the flag.
 import { writeFile } from 'node:fs/promises'
 import { createDshSubstrate } from '../../lib/adapters/dsh/index.js'
+import { createDshChannels } from '../../lib/adapters/dsh/channels.js'
+import { runImprovementStep } from '../../lib/core/loop.js'
 
 // Host function deps — the substrate takes them by injection so lib/ keeps no
 // hard @deepseek-ai imports. They MUST come from the host's own package copy
@@ -108,7 +110,53 @@ export function apply(ctx, config = {}) {
           await sub.dispose(h3)
         } catch (e) { forkCheck = { error: String(e?.stack ?? e) } }
 
-        const result = { caps, notes: sub.notes(), handleNotes: handle.notes, mount: sub.describeMount(handle), evidence: ev, headerTools, restrictCheck, recordEvents: recordEvents.map((e) => ({ seq: e.seq, type: e.type })), recordCheck, forkCheck }
+        // Live channels: a real select + propose through mounted judge/editor
+        // agents — the Harness² thinking half on the wire.
+        let channelCheck = { skipped: true }
+        try {
+          const chNotes = []
+          const channels = createDshChannels({
+            substrate: sub,
+            spec: { model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' } },
+            notes: chNotes,
+          })
+          const verdict = await channels.select(
+            'The function returns the sum of the two arguments, verified by tests.',
+            'I dunno, something about numbers maybe.')
+          const proposals = await channels.propose({
+            task: { prompt: 'Reply with exactly the text PROBE-OK and nothing else.' },
+            spec: { prompt: { guidance: 'be helpful' } },
+            specHash: ev.specHash,
+            baseTrajectory: `outcome=${ev.outcome}; final=${ev.deliverable?.finalText}; steps=0`,
+            lessons: [],
+          })
+          channelCheck = { verdict, proposalCount: proposals.length, proposals: proposals.map((p) => p.description), notes: chNotes }
+        } catch (e) { channelCheck = { error: String(e?.stack ?? e) } }
+
+        // The crown jewel: one full Harness² improvement step live — propose,
+        // probe, compose, blind-select, gate, reflect, all on the real host.
+        let loopCheck = { skipped: true }
+        try {
+          const ch = createDshChannels({
+            substrate: sub,
+            spec: { model: { provider: 'openrouter', model: 'deepseek/deepseek-v4.1-flash-1017' } },
+          })
+          const step = await runImprovementStep({
+            task: { id: 'loop-1', domain: 'live', prompt: 'Reply with exactly the text PROBE-OK and nothing else.' },
+            baseSpec: spec,
+            substrate: sub,
+            channels: ch,
+            caps: sub.capabilities(),
+          })
+          loopCheck = {
+            ok: step.ok, improved: step.improved, adoptedLabel: step.adoptedLabel,
+            notes: step.notes, proposals: step.trail.proposals.map((p) => p.description),
+            selection: step.trail.selection, lesson: step.lesson && { cue: step.lesson.cue, lesson: step.lesson.lesson },
+            evidences: step.trail.evidences.map((e) => ({ label: e.label, outcome: e.evidence.outcome, final: e.evidence.deliverable?.finalText?.slice(0, 60) })),
+          }
+        } catch (e) { loopCheck = { error: String(e?.stack ?? e) } }
+
+        const result = { caps, notes: sub.notes(), handleNotes: handle.notes, mount: sub.describeMount(handle), evidence: ev, headerTools, restrictCheck, recordEvents: recordEvents.map((e) => ({ seq: e.seq, type: e.type })), recordCheck, forkCheck, channelCheck, loopCheck }
         await writeFile(out, JSON.stringify(result, null, 2))
         log(`ph-probe done: outcome=${ev.outcome} steps=${ev.steps.length} tokens=${ev.stats.tokens} delivered=${ev.deliverable.delivered}`)
       } catch (e) {
