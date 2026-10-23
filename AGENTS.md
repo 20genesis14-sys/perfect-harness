@@ -45,6 +45,7 @@ Node `^22.19 || >=24`. No build step — plain ESM (`"type": "module"`).
 | `lib/core/selection.js` | Blind pairwise selection, position-swap, base-in-pool |
 | `lib/core/loop.js` | `runImprovementStep` — full PPC cycle over injected deps |
 | `lib/adapters/mock.js` | Mock substrate + scripted channels (seam proof, no model) |
+| `lib/adapters/dsh/` | DSH substrate: `spec-mount.js` (pure spec→plan), `evidence.js` (pure events→Evidence), `seams.js` (probe), `index.js` (substrate against host ctx) |
 | `lib/index.js` | Exports/wiring only |
 
 ## Testing conventions
@@ -53,3 +54,7 @@ Node `^22.19 || >=24`. No build step — plain ESM (`"type": "module"`).
 - `tests/loop.test.mjs` runs the full improvement step against the mock
   substrate — the seam-proof suite. If it needs a real host to pass, the seam
   is drawn wrong.
+- `tests/dsh-contract.test.mjs` mocks the host ctx mirroring the real
+  `@deepseek-ai/*` `.d.ts` shapes (`agents.create`+`setup`,
+  `session/event`, `snapshotEvents`, `tools.restrict`). If DSH changes
+  shape, update the adapter AND the mock.

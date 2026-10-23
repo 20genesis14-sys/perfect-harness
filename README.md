@@ -106,6 +106,40 @@ spec hashes); every pair judged twice with swapped seats — order-flipping
 verdicts count as `split`, and any `split` flags `inconsistent` confidence,
 which forces the human gate.
 
+## DSH adapter (`lib/adapters/dsh/`)
+
+The DeepSeek Harness substrate, verified against `0.2.1-rc.2` types and a
+live profile (see `docs/RECON-DSH.md`). All seven capability flags map to
+real seams:
+
+```js
+import { createDshSubstrate } from 'perfect-harness'
+
+const substrate = createDshSubstrate({
+  ctx,   // host Cordis ctx (inside a plugin/agent)
+  deps: { buildForkSeed, appendPluginRecord, createUserMessage }, // optional
+})
+const handle = await substrate.mount(spec)   // agents.create + setup callback
+const evidence = await substrate.run(handle, task)
+await substrate.dispose(handle)
+```
+
+| spec field | DSH materialization |
+| --- | --- |
+| `prompt.persona` | `ph:persona` section, order 0 (persona prefix layer) |
+| `prompt.guidance` / `systemAppend` | `ph:guidance` (700) / `ph:system-append` (10300) |
+| `tools.keep` / `hide` | `tools.restrict({allow})` / `({deny})` — unknown names noted, never thrown |
+| `tools.guidance` | `ph:tool-guidance` (3200) |
+| `model` | `agentOptions {provider, model, reasoningEffort}` at create |
+| `memory` | `ph:memory` (300) |
+| `skills`/`agents`/`scripts` | noted as unmounted — the preset path (`agentPresets.register` + `meta.agentPreset`) is the next iteration |
+
+`run` sends the task as a `next-turn` user message, waits `whenIdle` (wall
+clock bounded), and rebuilds `Evidence` from `session.snapshotEvents()` —
+the committed log is authoritative; `seq`s survive into lesson refs. A
+timeout cancels the agent and reports `outcome: 'timeout'`; a bounded drain
+follows so a stuck agent cannot hang the loop.
+
 ## Quick start (mock, no model)
 
 ```js
@@ -123,5 +157,6 @@ const result = await runImprovementStep({ task, baseSpec, substrate, channels, g
 
 ## Status
 
-`npm test` — 54 tests. Core + mock adapter done; real substrates (DSH next)
-plug into the same seam. See `AGENTS.md` for the working contract.
+`npm test` — 65 tests. Core + mock adapter + DSH adapter (against a
+mocked host ctx mirroring the real `.d.ts` shapes) done. See `AGENTS.md`
+for the working contract and `docs/RECON-DSH.md` for the seam inventory.
