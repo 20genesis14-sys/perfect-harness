@@ -1,0 +1,20 @@
+{
+  "name": "perfect-harness",
+  "version": "0.1.0",
+  "description": "Vendor-agnostic recursive agent harnessing: evidence model, spec diffs, propose-probe-compose loop, lessons library. Method core only — substrates plug in through adapters.",
+  "type": "module",
+  "main": "lib/index.js",
+  "exports": {
+    ".": "./lib/index.js",
+    "./adapters/mock": "./lib/adapters/mock.js"
+  },
+  "engines": {
+    "node": "^22.19 || >=24"
+  },
+  "scripts": {
+    "test": "node --test tests/**/*.test.mjs",
+    "check": "node --check lib/index.js && node --check lib/adapters/mock.js && for %f in (lib\\core\\*.js) do node --check %f"
+  },
+  "license": "Apache-2.0",
+  "private": true
+}
