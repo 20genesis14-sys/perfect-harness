@@ -237,3 +237,17 @@ Findings the live run exposed, now encoded:
   `{type:text,text}`, `{type:final,text}` — sufficient to rebuild canonical
   Evidence for external process isolation. `dsh headless` is single-shot
   by design ("answer one task and exit"); no interactive stdin mode.
+- **External-process substrate** (`lib/adapters/dsh/proc.js`): each roll-out
+  spawns `dsh headless --patch <base> --patch <generated> --json <task>` —
+  REAL OS-process isolation, immune to the in-process teardown race. spec→
+  patch: model→`agent-default-model` config (provider/model/reasoningEffort
+  all verified volatile fields), prompt.*→generated `ph-sections.mjs`
+  plugin (patch-anchored relative names are legal HERE — unlike registered
+  presets), skills/agents/scripts→`insert:` rows. NDJSON→Evidence maps
+  tool_call/tool_result/status/final (seqs are stream-order, not host seqs
+  — documented limit). A full `runImprovementStep` ran entirely on spawned
+  processes: 5 roll-outs + live select + admitted lesson.
+- **Lesson-library suppression observed live**: with 4 exact-output lessons
+  served, `propose` returned `[]` verbatim — the library correctly
+  suppresses redundant proposals on a "solved" domain (recursion working,
+  arguably too well: campaigns need domain diversity to keep proposing).

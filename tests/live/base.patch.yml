@@ -1,0 +1,27 @@
+# Minimal base patch for external-process roll-outs (dsh-proc substrate).
+# NO probe plugin — the spawned process only answers the task.
+
+# 1. OpenRouter provider + model catalog (wire api required by llm-pi-ai).
+- id: llm-pi-ai
+  config:
+    providers:
+      openrouter:
+        api: openai-completions
+        models:
+          - id: deepseek/deepseek-v4.1-flash-1017
+            name: "DeepSeek: DeepSeek V4.1 Flash 1017"
+            contextWindow: 1048576
+            maxTokens: 393216
+            input:
+              - text
+        apiKeyEnv: OPENROUTER_API_KEY
+
+# 2. Default route — per-spec overrides land in the generated patch.
+- id: agent-default-model
+  config:
+    provider: openrouter
+    model: deepseek/deepseek-v4.1-flash-1017
+
+# 3. Re-enable the local credentials store (disabled in stock headless).
+- id: credentials
+  disabled: false
